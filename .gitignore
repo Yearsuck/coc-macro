@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.superpowers/
+config.json
+recordings/
+tests/fixtures/raw/
+data/
+dist/
+build/
+*.spec
