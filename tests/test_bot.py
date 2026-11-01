@@ -205,3 +205,11 @@ def test_callbacks_are_optional_and_never_break_the_run():
         raise RuntimeError("ui exploded")
     bot, _, _ = make(g, on_phase=boom, on_reading=boom)
     assert bot.run_once() is True
+
+
+def test_unreadable_damage_is_logged_and_dumped_once():
+    g = FakeGame([GOOD, GOOD], damages=[None] * 45 + [60])
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.dumped == ["damage"]
+    assert sum("daño" in m.lower() for m in logs) == 1

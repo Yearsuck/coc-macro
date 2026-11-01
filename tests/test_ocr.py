@@ -69,7 +69,7 @@ CROPS = sorted((FIX / "crops").glob("*.png"))
 def test_real_crops_that_used_to_fail(path):
     """Loot crops from villages with different skins that the bot could not read (or misread:
     2 660 193 came out as 2860193). The expected number is in the file name."""
-    expected = int(path.stem.rsplit("_", 1)[1])
+    expected = int(path.stem.rsplit("_", 1)[1].rstrip("%"))
     assert ocr.read_crop(cv2.imread(str(path))) == expected
 
 
