@@ -51,3 +51,16 @@ def test_aspect_mismatch_refuses(tmp_path, monkeypatch):
         monkeypatch.setattr(winctl, "capture", lambda win: frame)
         cfg = config.Config(aspect=1.0)
         game.RealGame(WIN, cfg, Recording("d", 1.0, []), threading.Event(), tmp_path)
+
+
+def test_works_when_the_window_is_smaller_than_at_calibration(tmp_path, monkeypatch):
+    """Real bug: window became 951x535 (same aspect) while templates were cut at 1296x729."""
+    full = cv2.imread(str(FIX / "f004.png"))
+    templates.save_template("next", full, (0.909, 0.7517), (0.06, 0.07), tmp_path)
+    small = cv2.resize(full, (951, 535), interpolation=cv2.INTER_AREA)
+    monkeypatch.setattr(winctl, "capture", lambda win: small)
+    cfg = config.Config(aspect=1296 / 729, regions=REGIONS)
+    g = game.RealGame(winctl.GameWindow(1, 951, 535), cfg, Recording("d", cfg.aspect, []),
+                      threading.Event(), tmp_path)
+    assert g.screen_is("scout") is True
+    assert g.read_resources() == (986486, 183941)
