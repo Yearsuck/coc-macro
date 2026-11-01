@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from cocmacro import calibrate, game, recorder, winctl
-from cocmacro.config import Config
+from cocmacro.config import Config, region_ok
 
 NEEDED_TEMPLATES = ["battle", "next", "ok", "back"]
 
@@ -15,7 +15,7 @@ def check(cfg: Config, tpl_dir: Path, rec_dir: Path, dry_run: bool,
     except (winctl.WindowNotFound, winctl.WindowMinimized) as e:
         return str(e)
     missing = [n for n in calibrate.BUTTONS if n not in cfg.buttons] + \
-              [n for n in calibrate.REGIONS if n not in cfg.regions]
+              [n for n in calibrate.REGIONS if n not in cfg.regions or not region_ok(cfg.regions[n])]
     tpl_dir = Path(tpl_dir)
     missing += [n for n in NEEDED_TEMPLATES if not (tpl_dir / f"{n}.png").exists()]
     if not any((tpl_dir / f"{n}.png").exists() for n in ("surrender", "end")):

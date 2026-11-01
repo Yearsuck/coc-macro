@@ -68,3 +68,11 @@ def test_aspect_changed(tmp_path):
     cfg = good_cfg()
     cfg.aspect = 1.0
     assert "proporcion" in check(cfg, t, r, dry_run=False).lower()
+
+
+def test_empty_region_is_reported(tmp_path):
+    t, r = setup(tmp_path)
+    cfg = good_cfg()
+    cfg.regions["damage"] = (0.5, 0.5, 0.5, 0.5)
+    msg = check(cfg, t, r, dry_run=False)
+    assert "calibr" in msg.lower() and "damage" in msg
