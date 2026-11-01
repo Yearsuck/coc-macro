@@ -7,6 +7,17 @@ from cocmacro.config import Config, region_ok
 NEEDED_TEMPLATES = ["battle", "next", "ok", "back"]
 
 
+def calibration_missing(cfg: Config, tpl_dir: Path) -> list[str]:
+    """Names of the buttons, zones and button templates that are not calibrated (usable) yet."""
+    tpl_dir = Path(tpl_dir)
+    missing = [n for n in calibrate.BUTTONS if n not in cfg.buttons] + \
+              [n for n in calibrate.REGIONS if n not in cfg.regions or not region_ok(cfg.regions[n])]
+    missing += [n for n in NEEDED_TEMPLATES if not (tpl_dir / f"{n}.png").exists()]
+    if not any((tpl_dir / f"{n}.png").exists() for n in ("surrender", "end")):
+        missing.append("surrender")
+    return missing
+
+
 def check(cfg: Config, tpl_dir: Path, rec_dir: Path, dry_run: bool,
           find_window=winctl.find_game_window, capture=winctl.capture) -> str | None:
     try:
@@ -14,12 +25,7 @@ def check(cfg: Config, tpl_dir: Path, rec_dir: Path, dry_run: bool,
         capture(win)
     except (winctl.WindowNotFound, winctl.WindowMinimized) as e:
         return str(e)
-    missing = [n for n in calibrate.BUTTONS if n not in cfg.buttons] + \
-              [n for n in calibrate.REGIONS if n not in cfg.regions or not region_ok(cfg.regions[n])]
-    tpl_dir = Path(tpl_dir)
-    missing += [n for n in NEEDED_TEMPLATES if not (tpl_dir / f"{n}.png").exists()]
-    if not any((tpl_dir / f"{n}.png").exists() for n in ("surrender", "end")):
-        missing.append("surrender")
+    missing = calibration_missing(cfg, tpl_dir)
     if cfg.aspect is None or missing:
         return "Falta calibrar: " + (", ".join(missing) if missing else "proporcion de ventana")
     try:

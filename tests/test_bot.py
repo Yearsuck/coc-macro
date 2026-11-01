@@ -183,3 +183,25 @@ def test_dry_run_reports_unreadable_without_failing():
     bot, logs, _ = make(g, dry_run=True, read_tries=2)
     assert bot.run_once() is True
     assert any("no se pudo leer" in m.lower() for m in logs)
+
+
+def test_phases_and_readings_are_reported_for_the_ui():
+    g = FakeGame([LOW, LOW, GOOD, GOOD], damages=[30, 60], times=[170, 160])
+    phases, readings = [], []
+    bot, _, _ = make(g, on_phase=phases.append, on_reading=lambda r: readings.append(dict(r)))
+    assert bot.run_once() is True
+    assert phases == ["search", "evaluate", "evaluate", "deploy", "watch", "watch", "surrender", "back"]
+    first = next(r for r in readings if r.get("gold") is not None)        # a reset to None comes first
+    assert (first["gold"], first["elixir"], first["verdict"]) == (100_000, 100_000, "skip")
+    assert any(r.get("gold") == 600_000 and r.get("verdict") == "attack" for r in readings)
+    last = readings[-1]
+    assert last["damage"] == 60 and last["time_left"] == 160
+
+
+def test_callbacks_are_optional_and_never_break_the_run():
+    g = FakeGame([GOOD, GOOD], damages=[60])
+
+    def boom(_):
+        raise RuntimeError("ui exploded")
+    bot, _, _ = make(g, on_phase=boom, on_reading=boom)
+    assert bot.run_once() is True
