@@ -76,3 +76,14 @@ def test_empty_region_is_reported(tmp_path):
     cfg.regions["damage"] = (0.5, 0.5, 0.5, 0.5)
     msg = check(cfg, t, r, dry_run=False)
     assert "calibr" in msg.lower() and "damage" in msg
+
+
+def test_calibration_missing_lists_what_is_not_calibrated(tmp_path):
+    t, _ = setup(tmp_path)
+    assert preflight.calibration_missing(good_cfg(), t) == []
+    cfg = good_cfg()
+    del cfg.buttons["next"]
+    cfg.regions["gold"] = (0.5, 0.5, 0.5, 0.5)
+    assert preflight.calibration_missing(cfg, t) == ["next", "gold"]
+    assert "calibrar" not in "".join(preflight.calibration_missing(good_cfg(), tmp_path / "none")).lower()
+    assert "battle" in preflight.calibration_missing(good_cfg(), tmp_path / "none")        # templates missing
