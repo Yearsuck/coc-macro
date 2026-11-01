@@ -64,3 +64,19 @@ def test_works_when_the_window_is_smaller_than_at_calibration(tmp_path, monkeypa
                       threading.Event(), tmp_path)
     assert g.screen_is("scout") is True
     assert g.read_resources() == (986486, 183941)
+
+
+def test_dump_debug_keeps_what_it_could_not_read_and_prunes(tmp_path, monkeypatch):
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.debug_dir = tmp_path / "debug"
+    g.dump_debug("loot")
+    names = sorted(p.name for p in g.debug_dir.iterdir())
+    assert len(names) == 3 and any("gold" in n for n in names) and any("elixir" in n for n in names)
+    for _ in range(14):
+        g.dump_debug("loot")
+    assert len(list(g.debug_dir.iterdir())) == game.DEBUG_KEEP
+
+
+def test_dump_debug_without_a_dir_does_nothing(tmp_path, monkeypatch):
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.dump_debug("loot")                       # debug_dir is None: must not raise

@@ -164,7 +164,7 @@ class App:
         def job():
             win = winctl.find_game_window()
             rec = None if dry else recorder.load_recording(self.cfg.deployment, REC_DIR)
-            g = game.RealGame(win, self.cfg, rec, self.stop_ev, TPL_DIR)
+            g = game.RealGame(win, self.cfg, rec, self.stop_ev, TPL_DIR, debug_dir=DATA / "debug")
             self.bot = bot.Bot(g, self.cfg, self.log, self.stop_ev, dry_run=dry)
             self.log("Simulacion (no pulsa nada)" if dry else "Empezando bucle de ataques (F8 para parar)")
             if dry:
