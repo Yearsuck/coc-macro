@@ -68,8 +68,15 @@ def classify(glyph: np.ndarray) -> str | None:
     return str(t["labels"][i]) if d[i] <= MAX_DIST else None
 
 
+def _usable(crop: np.ndarray) -> bool:
+    return crop.shape[0] >= 4 and crop.shape[1] >= 4      # empty/degenerate region: nothing to read
+
+
 def read_number(img: np.ndarray, region: tuple[float, float, float, float]) -> int | None:
-    glyphs = segment(_crop(img, region))
+    crop = _crop(img, region)
+    if not _usable(crop):
+        return None
+    glyphs = segment(crop)
     if not glyphs:
         return None
     chars = [classify(g) for g in glyphs]
@@ -97,6 +104,8 @@ def read_time_left(img: np.ndarray, region: tuple[float, float, float, float]) -
     digits (~0.85 of their height), so they are told apart by height and used only as
     separators; smaller specks are ignored."""
     crop = _crop(img, region)
+    if not _usable(crop):
+        return None
     mask = (crop.min(axis=2) > THRESH).astype(np.uint8)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     comps = [(stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_WIDTH],
