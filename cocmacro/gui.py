@@ -234,13 +234,22 @@ class App:
 
     def _calibrate_step(self, win, name: str, kind: str, banner: str):
         """One calibration step with on-screen feedback (overlay events go through the queue)."""
-        self.q.put(("ov_banner", banner))
+        guide = calibrate.suggested_region(name) if kind == "region" else None
+        known = self.cfg.buttons.get(name) if kind == "button" else None
+        avoid = guide or (known and (known[0] - 0.07, known[1] - 0.09, known[0] + 0.07, known[1] + 0.09))
+        order = ("middle", "top", "bottom") if kind == "region" else ("top", "middle", "bottom")
+
+        def say(text):
+            self.q.put(("ov_banner", (text, avoid, order)))
+        say(banner)
+        self.q.put(("ov_guide", guide))
         self.cfg = calibrate.run_step(
             win, self.cfg, name, kind, TPL_DIR,
             on_rect=lambda r: self.q.put(("ov_rect", r)),
             on_click=lambda p: self.q.put(("ov_marker", (p, name))),
-            on_invalid=lambda m: self.q.put(("ov_banner", f"Atencion: {m}")))
+            on_invalid=lambda m: say(f"Atencion: {m}"))
         if kind == "region":
+            self.q.put(("ov_guide", None))
             self.q.put(("ov_saved", (name, self.cfg.regions[name])))
         DATA.mkdir(exist_ok=True)
         config.save(self.cfg, CFG_PATH)
@@ -250,7 +259,9 @@ class App:
             if self.overlay is None:
                 self.overlay = overlay.Overlay(self.root)
             if kind == "ov_banner":
-                self.overlay.banner(val)
+                self.overlay.banner(*val) if isinstance(val, tuple) else self.overlay.banner(val)
+            elif kind == "ov_guide":
+                self.overlay.guide(val)
             elif kind == "ov_rect":
                 self.overlay.rect(val)
             elif kind == "ov_marker":

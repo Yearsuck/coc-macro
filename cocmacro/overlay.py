@@ -17,6 +17,24 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x20, 0x80000, 0x80, 0x08000000
 
 
+def banner_box(size: tuple[int, int], banner_h: int, banner_w: int,
+               avoid: tuple[float, float, float, float] | None,
+               order: tuple[str, ...] = ("top", "middle", "bottom"), margin: int = 24
+               ) -> tuple[int, int, int, int]:
+    """Pixel box (x0, y0, x1, y1) for the banner: the first slot, in `order`, that stays clear of
+    `avoid` (a pixel rect). Falls back to the first slot when nothing is clear."""
+    w, h = size
+    x0 = max(0, (w - banner_w) // 2)
+    x1 = min(w, x0 + banner_w)
+    ys = {"top": 14, "middle": max(14, int(h * 0.38) - banner_h // 2), "bottom": max(14, h - banner_h - 14)}
+    boxes = [(x0, ys[slot], x1, ys[slot] + banner_h) for slot in order]
+    for box in boxes:
+        if avoid is None or (box[2] <= avoid[0] - margin or avoid[2] + margin <= box[0]
+                             or box[3] <= avoid[1] - margin or avoid[3] + margin <= box[1]):
+            return box
+    return boxes[0]
+
+
 class Overlay:
     def __init__(self, root: tk.Tk, find_window: Callable[[], winctl.GameWindow] = winctl.find_game_window):
         self.root, self.find_window = root, find_window
@@ -63,15 +81,35 @@ class Overlay:
             self.canvas.delete(tag or "all")
 
     # -- drawing -------------------------------------------------------
-    def banner(self, text: str) -> None:
+    def banner(self, text: str, avoid: tuple[float, float, float, float] | None = None,
+               order: tuple[str, ...] = ("top", "middle", "bottom")) -> None:
+        """Step text placed where it does not cover `avoid` (relative rect of the zone to mark)."""
         self._ensure()
-        c, (w, _) = self.canvas, self.size
+        c, (w, h) = self.canvas, self.size
         c.delete("banner")
-        t = c.create_text(w // 2, 34, text=text, fill=PAPER, width=w - 120, justify="center",
-                          font=("Segoe UI", 15, "bold"), tags="banner")
-        x0, y0, x1, y1 = c.bbox(t)
-        r = c.create_rectangle(x0 - 16, y0 - 10, x1 + 16, y1 + 10, fill=INK, outline=GOLD, width=2, tags="banner")
+        t = c.create_text(0, 0, text=text, fill=PAPER, width=min(w - 120, 520), justify="center",
+                          font=("Segoe UI", 13, "bold"), tags="banner")
+        bx = c.bbox(t)
+        bw, bh = bx[2] - bx[0] + 32, bx[3] - bx[1] + 20
+        avoid_px = geometry.rect_to_px(avoid, self.size) if avoid else None
+        x0, y0, x1, y1 = banner_box(self.size, bh, bw, avoid_px, order)
+        r = c.create_rectangle(x0, y0, x1, y1, fill=INK, outline=GOLD, width=2, tags="banner")
+        c.coords(t, (x0 + x1) // 2, (y0 + y1) // 2)
         c.tag_lower(r, t)
+
+    def guide(self, rect: tuple[float, float, float, float] | None, text: str = "Zona sugerida") -> None:
+        """Dashed box showing where the zone usually is."""
+        self._ensure()
+        c = self.canvas
+        c.delete("guide")
+        if rect is None:
+            return
+        x0, y0, x1, y1 = geometry.rect_to_px(rect, self.size)
+        c.create_rectangle(x0 - 4, y0 - 4, x1 + 4, y1 + 4, outline=GOLD, width=2, dash=(6, 4), tags="guide")
+        t = c.create_text(x0, y1 + 14, text=text, fill=PAPER, anchor="w", font=("Segoe UI", 9, "bold"), tags="guide")
+        bb = c.bbox(t)
+        bg = c.create_rectangle(bb[0] - 3, bb[1] - 1, bb[2] + 3, bb[3] + 1, fill=INK, outline=GOLD, tags="guide")
+        c.tag_lower(bg, t)
 
     def rect(self, rect: tuple[float, float, float, float], color: str = GOLD, label: str | None = None,
              tag: str = "live") -> None:
