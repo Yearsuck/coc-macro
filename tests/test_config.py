@@ -42,3 +42,10 @@ def test_parse_mmss():
         with pytest.raises(ValueError):
             config.parse_mmss(bad)
     assert config.format_mmss(140) == "2:20"
+
+
+def test_update_check_on_by_default_and_saved(tmp_path):
+    assert config.load(tmp_path / "missing.json").auto_check_updates is True
+    cfg = config.Config(auto_check_updates=False)
+    config.save(cfg, tmp_path / "c.json")
+    assert config.load(tmp_path / "c.json").auto_check_updates is False
