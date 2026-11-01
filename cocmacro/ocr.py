@@ -16,6 +16,7 @@ THRESH = 150          # min(B,G,R) above this = white text
 GW, GH = 12, 18       # normalised glyph size
 MAX_DIST = 0.28       # mean abs diff above this -> glyph unknown -> None
 ASPECT_W = 0.5
+MIN_MARGIN = 0.02      # nearest other digit must be at least this much further than the best match
 
 
 def parse_digits(text: str) -> int | None:
@@ -30,6 +31,32 @@ def _crop(img: np.ndarray, region: tuple[float, float, float, float]) -> np.ndar
     return img[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
 
 
+def _split_touching(patch: np.ndarray, ref_w: float) -> list[np.ndarray]:
+    """A blob about two (or three) digits wide is touching digits: cut it at the thinnest columns."""
+    h, w = patch.shape
+    parts = int(round(w / ref_w))
+    if parts < 2 or w < 1.55 * ref_w:
+        return [patch]
+    cols = patch.sum(axis=0)
+    cuts, prev = [], 0
+    for k in range(1, parts):
+        centre = int(round(w * k / parts))
+        lo, hi = max(prev + 2, centre - max(2, int(0.25 * ref_w))), min(w - 2, centre + max(2, int(0.25 * ref_w)))
+        if hi <= lo:
+            return [patch]
+        cut = lo + int(np.argmin(cols[lo:hi + 1]))
+        cuts.append(cut)
+        prev = cut
+    out, start = [], 0
+    for cut in cuts + [w]:
+        piece = patch[:, start:cut]
+        ys, xs = np.nonzero(piece)
+        if len(xs):
+            out.append(piece[ys.min():ys.max() + 1, xs.min():xs.max() + 1])
+        start = cut
+    return out or [patch]
+
+
 def segment(crop: np.ndarray) -> list[np.ndarray]:
     """Left-to-right list of binary glyph images (tight bounding boxes)."""
     mask = (crop.min(axis=2) > THRESH).astype(np.uint8)
@@ -41,7 +68,11 @@ def segment(crop: np.ndarray) -> list[np.ndarray]:
     tallest = max(c[3] for c in comps)
     comps = [c for c in comps if c[3] >= 0.75 * tallest]
     comps.sort(key=lambda c: c[0])
-    return [(labels[y:y + h, x:x + w] == i).astype(np.uint8) for x, y, w, h, i in comps]
+    ref_w = float(np.median([c[2] for c in comps]))
+    out: list[np.ndarray] = []
+    for x, y, w, h, i in comps:
+        out.extend(_split_touching((labels[y:y + h, x:x + w] == i).astype(np.uint8), ref_w))
+    return out
 
 
 def features(glyph: np.ndarray) -> tuple[np.ndarray, float]:
@@ -60,20 +91,31 @@ def _load() -> dict:
     return _templates
 
 
+def classify_in(glyph: np.ndarray, imgs: np.ndarray, aspect: np.ndarray, labels: np.ndarray) -> str | None:
+    """Nearest learned sample. Unknown when too far, or when the nearest sample of another digit is
+    almost as close (better to skip a village than to read 2860193 for 2660193)."""
+    feat, asp = features(glyph)
+    d = np.abs(imgs - feat).mean(axis=(1, 2)) + ASPECT_W * np.abs(aspect - asp)
+    i = int(d.argmin())
+    if d[i] > MAX_DIST:
+        return None
+    other = labels != labels[i]
+    if other.any() and d[other].min() - d[i] < MIN_MARGIN:
+        return None
+    return str(labels[i])
+
+
 def classify(glyph: np.ndarray) -> str | None:
     t = _load()
-    feat, asp = features(glyph)
-    d = np.abs(t["imgs"] - feat).mean(axis=(1, 2)) + ASPECT_W * np.abs(t["aspect"] - asp)
-    i = int(d.argmin())
-    return str(t["labels"][i]) if d[i] <= MAX_DIST else None
+    return classify_in(glyph, t["imgs"], t["aspect"], t["labels"])
 
 
 def _usable(crop: np.ndarray) -> bool:
     return crop.shape[0] >= 4 and crop.shape[1] >= 4      # empty/degenerate region: nothing to read
 
 
-def read_number(img: np.ndarray, region: tuple[float, float, float, float]) -> int | None:
-    crop = _crop(img, region)
+def read_crop(crop: np.ndarray) -> int | None:
+    """Digits in an already cropped region of the loot / damage numbers."""
     if not _usable(crop):
         return None
     glyphs = segment(crop)
@@ -83,6 +125,10 @@ def read_number(img: np.ndarray, region: tuple[float, float, float, float]) -> i
     if None in chars:
         return None
     return parse_digits("".join(chars))
+
+
+def read_number(img: np.ndarray, region: tuple[float, float, float, float]) -> int | None:
+    return read_crop(_crop(img, region))
 
 
 def time_from_groups(minutes: str, seconds: str) -> int | None:
