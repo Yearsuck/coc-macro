@@ -6,7 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
-from cocmacro import (__version__, bot, calibrate, config, frames, game, hotkeys, ocr, paths,
+from cocmacro import (__version__, bot, calibrate, config, frames, game, hotkeys, ocr, overlay, paths,
                       preflight, recorder, updater, winctl)
 from cocmacro.config import format_mmss, parse_mmss
 
@@ -27,6 +27,7 @@ class App:
         self.bot: bot.Bot | None = None
         self.recorder: recorder.Recorder | None = None
         self.busy = False
+        self.overlay: overlay.Overlay | None = None
         self._build()
         self.refresh_recordings()
         self.unregister = hotkeys.start(lambda: self.q.put(("stop", None)),
@@ -36,7 +37,7 @@ class App:
             updater.cleanup_old(Path(sys.executable))
         if self.cfg.auto_check_updates:
             threading.Thread(target=self._check_update, args=(False,), daemon=True).start()
-        self.root.after(200, self._poll)
+        self.root.after(50, self._poll)
 
     # -- layout --------------------------------------------------------
     def _build(self):
@@ -100,11 +101,13 @@ class App:
                     self._offer_update(*val)
                 elif kind == "quit":
                     self.close()
+                elif kind.startswith("ov_"):
+                    self._overlay_event(kind, val)
         except queue.Empty:
             pass
         if self.bot:
             self.counter.configure(text=f"Ataques: {self.bot.attacks_done}")
-        self.root.after(200, self._poll)
+        self.root.after(50, self._poll)
 
     def refresh_recordings(self):
         names = recorder.list_recordings(REC_DIR)
@@ -202,28 +205,64 @@ class App:
                 self.log("Grabacion vacia: no se guardo")
 
     def calibrate(self):
+        steps = calibrate.STEPS
+
         def job():
             win = winctl.find_game_window()
-            for name, kind, prompt in calibrate.STEPS:
+            self.q.put(("ov_clear", None))
+            for i, (name, kind, prompt) in enumerate(steps, 1):
                 if self.stop_ev.is_set():
                     self.log("Calibracion cancelada")
+                    self.q.put(("ov_hide", 0))
                     return
                 self.log(f"[{name}] {prompt}")
-                self.cfg = calibrate.run_step(win, self.cfg, name, kind, TPL_DIR)
-                DATA.mkdir(exist_ok=True)
-                config.save(self.cfg, CFG_PATH)
+                self._calibrate_step(win, name, kind, f"Paso {i} de {len(steps)}: {prompt}")
+            self.q.put(("ov_banner", "Calibracion terminada: estas son las zonas guardadas"))
             self.log("Calibracion terminada")
+            self.q.put(("ov_hide", 4000))
         self._worker(job)
 
     def calibrate_timer(self):
         def job():
             win = winctl.find_game_window()
-            self.log("[timer] Entra en una batalla y arrastra un rectangulo sobre el reloj (ej. 2m 51s)")
-            self.cfg = calibrate.run_step(win, self.cfg, "timer", "region", TPL_DIR)
-            DATA.mkdir(exist_ok=True)
-            config.save(self.cfg, CFG_PATH)
+            prompt = "Entra en una batalla y arrastra un rectangulo sobre el reloj (ej. 2m 51s)"
+            self.log(f"[timer] {prompt}")
+            self._calibrate_step(win, "timer", "region", prompt)
             self.log("Reloj calibrado")
+            self.q.put(("ov_hide", 2500))
         self._worker(job)
+
+    def _calibrate_step(self, win, name: str, kind: str, banner: str):
+        """One calibration step with on-screen feedback (overlay events go through the queue)."""
+        self.q.put(("ov_banner", banner))
+        self.cfg = calibrate.run_step(
+            win, self.cfg, name, kind, TPL_DIR,
+            on_rect=lambda r: self.q.put(("ov_rect", r)),
+            on_click=lambda p: self.q.put(("ov_marker", (p, name))),
+            on_invalid=lambda m: self.q.put(("ov_banner", f"Atencion: {m}")))
+        if kind == "region":
+            self.q.put(("ov_saved", (name, self.cfg.regions[name])))
+        DATA.mkdir(exist_ok=True)
+        config.save(self.cfg, CFG_PATH)
+
+    def _overlay_event(self, kind: str, val):
+        try:
+            if self.overlay is None:
+                self.overlay = overlay.Overlay(self.root)
+            if kind == "ov_banner":
+                self.overlay.banner(val)
+            elif kind == "ov_rect":
+                self.overlay.rect(val)
+            elif kind == "ov_marker":
+                self.overlay.marker(*val)
+            elif kind == "ov_saved":
+                self.overlay.saved_rect(*val)
+            elif kind == "ov_clear":
+                self.overlay.clear()
+            elif kind == "ov_hide":
+                self.root.after(int(val), self.overlay.hide)
+        except Exception as e:  # the overlay is only feedback: never break the calibration
+            self.log(f"(sin capa visual: {e})")
 
     def read_now(self):
         def job():
