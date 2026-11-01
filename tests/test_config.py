@@ -49,3 +49,15 @@ def test_update_check_on_by_default_and_saved(tmp_path):
     cfg = config.Config(auto_check_updates=False)
     config.save(cfg, tmp_path / "c.json")
     assert config.load(tmp_path / "c.json").auto_check_updates is False
+
+
+def test_region_ok():
+    assert config.region_ok((0.4, 0.1, 0.5, 0.2)) is True
+    assert config.region_ok((0.5, 0.5, 0.5, 0.5)) is False       # a click, not a drag
+    assert config.region_ok((0.6, 0.6, 0.5, 0.5)) is False       # inverted
+
+
+def test_load_repairs_an_empty_timer_region(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text('{"regions": {"timer": [0.5195, 0.0766, 0.5195, 0.0766]}}')
+    assert config.load(p).regions["timer"] == config.DEFAULT_REGIONS["timer"]

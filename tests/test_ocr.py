@@ -53,3 +53,10 @@ def test_read_time_left_none_when_no_timer():
     ("2", "51", 171), ("", "45", 45), ("0", "05", 5), ("2", "75", None), ("", "", None), ("22", "10", None)])
 def test_time_from_groups(digits_before, digits_after, expected):
     assert ocr.time_from_groups(digits_before, digits_after) == expected
+
+
+@pytest.mark.parametrize("region", [(0.5, 0.5, 0.5, 0.5), (0.5, 0.5, 0.501, 0.501), (0.6, 0.6, 0.5, 0.5)])
+def test_degenerate_regions_give_none_not_a_crash(region):
+    img = np.zeros((729, 1296, 3), dtype=np.uint8)
+    assert ocr.read_number(img, region) is None
+    assert ocr.read_time_left(img, region) is None
