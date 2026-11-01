@@ -4,6 +4,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# Buttons whose lower part is a number that changes (the search price of 'Siguiente' depends on the
+# account: 1700 vs 1600): only the top share of the saved crop, the label, is matched.
+LABEL_ONLY = {"next": 0.55}
+
 
 def _path(name: str, dir: Path) -> Path:
     return Path(dir) / f"{name}.png"
@@ -25,6 +29,9 @@ def match(frame: np.ndarray, name: str, dir: Path, threshold: float = 0.85) -> b
     if not p.exists():
         return False
     tpl = cv2.imread(str(p))
+    keep = LABEL_ONLY.get(name)
+    if keep and tpl is not None:
+        tpl = tpl[: max(8, int(tpl.shape[0] * keep))]
     if tpl is None or tpl.shape[0] > frame.shape[0] or tpl.shape[1] > frame.shape[1]:
         return False
     res = cv2.matchTemplate(frame, tpl, cv2.TM_CCOEFF_NORMED)
