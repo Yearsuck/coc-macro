@@ -1,0 +1,18 @@
+{
+  "regions": {
+    "gold":   [0.040, 0.106, 0.135, 0.133],
+    "elixir": [0.040, 0.145, 0.135, 0.178],
+    "damage": [0.922, 0.774, 0.971, 0.809]
+  },
+  "labels": [
+    ["f004.png", "gold", 986486], ["f004.png", "elixir", 183941],
+    ["f005.png", "gold", 29940],  ["f005.png", "elixir", 92955],
+    ["f006.png", "gold", 81559],  ["f006.png", "elixir", 1291900],
+    ["f007.png", "gold", 1664232],["f007.png", "elixir", 1700083],
+    ["f019.png", "gold", 973319], ["f019.png", "elixir", 1222465], ["f019.png", "damage", 9],
+    ["f030.png", "gold", 490979], ["f030.png", "elixir", 736480],  ["f030.png", "damage", 23],
+    ["f040.png", "gold", 490206], ["f040.png", "elixir", 727254],
+    ["f051.png", "gold", 489832], ["f051.png", "elixir", 497373],  ["f051.png", "damage", 36],
+    ["f052.png", "gold", 485387], ["f052.png", "elixir", 490451],  ["f052.png", "damage", 53]
+  ]
+}
