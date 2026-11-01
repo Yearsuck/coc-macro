@@ -15,6 +15,7 @@ class Config:
     elixir_min: int = 500000
     surrender_pct: int = 50
     surrender_time_s: int = 140  # surrender when the clock shows less than this (2:20); 0 = off
+    auto_check_updates: bool = True
     deployment: str = "default"
     aspect: float | None = None
     buttons: dict[str, tuple[float, float]] = field(default_factory=dict)

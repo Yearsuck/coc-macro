@@ -1,11 +1,13 @@
 """Single-window tkinter app: start/stop the bot, record deployments, calibrate."""
 import queue
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
-from cocmacro import bot, calibrate, config, game, hotkeys, ocr, paths, preflight, recorder, winctl
+from cocmacro import (__version__, bot, calibrate, config, game, hotkeys, ocr, paths, preflight,
+                      recorder, updater, winctl)
 from cocmacro.config import format_mmss, parse_mmss
 
 DATA = paths.data_dir()
@@ -18,7 +20,7 @@ WARNING = ("Supercell prohibe automatizar ataques con macros.\n"
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.title("CoC Macro")
+        root.title(f"CoC Macro v{__version__}")
         self.cfg = config.load(CFG_PATH)
         self.q: queue.Queue = queue.Queue()
         self.stop_ev = threading.Event()
@@ -30,6 +32,10 @@ class App:
         self.unregister = hotkeys.start(lambda: self.q.put(("stop", None)),
                                         lambda: self.q.put(("end_record", None)))
         root.protocol("WM_DELETE_WINDOW", self.close)
+        if getattr(sys, "frozen", False):
+            updater.cleanup_old(Path(sys.executable))
+        if self.cfg.auto_check_updates:
+            threading.Thread(target=self._check_update, args=(False,), daemon=True).start()
         self.root.after(200, self._poll)
 
     # -- layout --------------------------------------------------------
@@ -47,6 +53,11 @@ class App:
             b.grid(row=0, column=i, padx=2, pady=2)
         self.dry = tk.BooleanVar()
         ttk.Checkbutton(f, text="Solo simular", variable=self.dry).grid(row=1, column=0, columnspan=2, sticky="w")
+        self.auto_upd = tk.BooleanVar(value=self.cfg.auto_check_updates)
+        ttk.Checkbutton(f, text="Buscar actualizaciones al abrir", variable=self.auto_upd).grid(
+            row=1, column=2, columnspan=3, sticky="w")
+        ttk.Button(f, text="Buscar actualizaciones", command=lambda: threading.Thread(
+            target=self._check_update, args=(True,), daemon=True).start()).grid(row=2, column=3, columnspan=2)
         ttk.Label(f, text="Despliegue:").grid(row=2, column=0, sticky="e")
         self.combo = ttk.Combobox(f, state="readonly", width=20)
         self.combo.grid(row=2, column=1, columnspan=2, sticky="w")
@@ -85,6 +96,10 @@ class App:
                         self.toggle_record()
                 elif kind == "done":
                     self.busy = False
+                elif kind == "update":
+                    self._offer_update(*val)
+                elif kind == "quit":
+                    self.close()
         except queue.Empty:
             pass
         if self.bot:
@@ -112,6 +127,7 @@ class App:
             messagebox.showerror("CoC Macro", str(e))
             return False
         self.cfg.deployment = self.combo.get() or self.cfg.deployment
+        self.cfg.auto_check_updates = self.auto_upd.get()
         DATA.mkdir(exist_ok=True)
         config.save(self.cfg, CFG_PATH)
         return True
@@ -217,6 +233,49 @@ class App:
                     for k in ("gold", "elixir", "damage") if k in self.cfg.regions}
             vals["timer"] = ocr.read_time_left(frame, self.cfg.regions["timer"]) if "timer" in self.cfg.regions else None
             self.log(f"Lectura: {vals}")
+        self._worker(job)
+
+    # -- updates -------------------------------------------------------
+    def _check_update(self, manual: bool):
+        try:
+            info = updater.check(__version__)
+        except Exception as e:  # offline, rate limited...: only bother the user if they asked
+            if manual:
+                self.log(f"No se pudo comprobar actualizaciones: {e}")
+            return
+        if info:
+            self.q.put(("update", (info, manual)))
+        elif manual:
+            self.log(f"Estas al dia (v{__version__})")
+
+    def _offer_update(self, info: "updater.UpdateInfo", manual: bool):
+        if not messagebox.askyesno(
+                "Actualizacion",
+                f"Hay una version nueva: v{info.version} (tienes v{__version__}).\n\n"
+                "Se descarga de GitHub, se comprueba su hash y la app se reinicia.\n"
+                "¿Instalarla ahora?"):
+            return
+        if not getattr(sys, "frozen", False):
+            self.log("Estas ejecutando desde el codigo: actualiza con git pull")
+            return
+        if self.busy:
+            self.log("Para el bot antes de actualizar")
+            return
+
+        def job():
+            exe = Path(sys.executable)
+            dest = updater.new_path_for(exe)
+            last = [0]
+
+            def progress(n):
+                if n - last[0] >= 10_000_000 or (info.size and n >= info.size):
+                    last[0] = n
+                    self.log(f"Descargando... {n // 1_000_000} MB")
+            self.log(f"Descargando v{info.version}...")
+            updater.download(info, dest, progress=progress)
+            self.log("Hash correcto. Instalando y reiniciando...")
+            updater.apply_update(dest, exe)
+            self.q.put(("quit", None))
         self._worker(job)
 
     def close(self):
