@@ -10,7 +10,8 @@ from cocmacro.winctl import WindowMinimized, WindowNotFound
 POLL = 0.5
 REPORT_EVERY = 20   # polls (10 s) between 'still waiting' messages
 READ_GAP = 0.4
-MAX_READ_TRIES = 20
+MAX_READ_TRIES = 10
+UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before giving up
 
 
 class Game(Protocol):
@@ -26,14 +27,20 @@ class _Abort(Exception):
     pass
 
 
+class _Unreadable(Exception):
+    pass
+
+
 class Bot:
     def __init__(self, game: Game, cfg: Config, log: Callable[[str], None],
                  stop: threading.Event, sleep=time.sleep, timeout_s: float = 60,
                  dry_run: bool = False, battle_timeout_s: float = 240,
-                 step_delay: float = 1.0):
+                 step_delay: float = 1.0, read_tries: int = MAX_READ_TRIES,
+                 unreadable_limit: int = UNREADABLE_LIMIT):
         self.game, self.cfg, self.log, self.stop = game, cfg, log, stop
         self.sleep, self.timeout_s, self.dry_run = sleep, timeout_s, dry_run
         self.battle_timeout_s, self.step_delay = battle_timeout_s, step_delay
+        self.read_tries, self.unreadable_limit = read_tries, unreadable_limit
         self.attacks_done = 0
 
     # -- helpers -------------------------------------------------------
@@ -57,7 +64,7 @@ class Bot:
 
     def _stable_read(self) -> tuple[int, int]:
         """Two equal, valid reads in a row (counters may still be animating)."""
-        for _ in range(MAX_READ_TRIES):
+        for _ in range(self.read_tries):
             self._check()
             a = self.game.read_resources()
             self.sleep(READ_GAP)
@@ -65,13 +72,27 @@ class Bot:
             if a == b and None not in a:
                 return a
             self.sleep(READ_GAP)
-        raise _Abort("No se pudo leer oro y elixir de forma fiable")
+        raise _Unreadable("No se pudo leer oro y elixir de forma fiable")
+
+    def _dump(self, reason: str) -> None:
+        """Keep a capture of what could not be read, if the game backend supports it."""
+        fn = getattr(self.game, "dump_debug", None)
+        if fn:
+            try:
+                fn(reason)
+            except Exception as e:
+                self.log(f"(no se pudo guardar la captura: {e})")
 
     # -- cycle ---------------------------------------------------------
     def _cycle(self) -> None:
         self._check()
         if self.dry_run:
-            gold, elixir = self._stable_read()
+            try:
+                gold, elixir = self._stable_read()
+            except _Unreadable:
+                self._dump("loot")
+                self.log("[simulacion] No se pudo leer oro y elixir")
+                return
             verdict = "atacaria" if decisions.should_attack(gold, elixir, self.cfg) else "pasaria (Siguiente)"
             self.log(f"[simulacion] oro {gold} elixir {elixir}: {verdict}")
             return
@@ -79,9 +100,22 @@ class Bot:
         for name in ("battle", "find", "attack"):
             self._click(name)
             self.sleep(self.step_delay)
+        unreadable = 0
         while True:
             self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga")
-            gold, elixir = self._stable_read()
+            try:
+                gold, elixir = self._stable_read()
+            except _Unreadable:
+                unreadable += 1
+                self._dump("loot")
+                if unreadable >= self.unreadable_limit:
+                    raise _Abort(f"No se pudo leer oro y elixir en {unreadable} aldeas seguidas: parado. "
+                                 "Mira las capturas de la carpeta data/debug o recalibra")
+                self.log(f"No se pudo leer el botin: salto esta aldea ({unreadable} seguidas)")
+                self._click("next")
+                self.sleep(self.step_delay)
+                continue
+            unreadable = 0
             if decisions.should_attack(gold, elixir, self.cfg):
                 self.log(f"Atacando: oro {gold}, elixir {elixir}")
                 break
