@@ -7,3 +7,6 @@ config.json
 recordings/
 tests/fixtures/raw/
 data/
+dist/
+build/
+*.spec
