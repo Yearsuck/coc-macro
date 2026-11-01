@@ -12,7 +12,7 @@ class FakeGame:
     def __init__(self, reads, damages=(), results_early=False, never_scout=False, boom=False, times=()):
         self.reads, self.damages, self.times = list(reads), list(damages), list(times)
         self.results_early, self.never_scout, self.boom = results_early, never_scout, boom
-        self.screen, self.clicks, self.deployed = "home", [], 0
+        self.screen, self.clicks, self.deployed, self.dumped = "home", [], 0, []
 
     def screen_is(self, name):
         if self.boom:
@@ -41,6 +41,9 @@ class FakeGame:
 
     def read_time_left(self):
         return self.times.pop(0) if self.times else None
+
+    def dump_debug(self, reason):
+        self.dumped.append(reason)
 
     def play_deployment(self):
         self.deployed += 1
@@ -148,3 +151,35 @@ def test_long_waits_are_reported_not_silent():
     assert bot.run_once() is False
     waiting = [m for m in logs if "esperando" in m.lower() and "aldea enemiga" in m.lower()]
     assert len(waiting) >= 2          # reported at 10 s and 20 s before giving up at 25 s
+
+
+def test_unreadable_village_is_skipped_not_fatal():
+    g = FakeGame([(None, None)] * 4 + [GOOD, GOOD], damages=[60])
+    bot, logs, _ = make(g, read_tries=2)
+    assert bot.run_once() is True
+    assert g.clicks[:4] == ["battle", "find", "attack", "next"]
+    assert g.deployed == 1
+    assert len(g.dumped) == 1                       # kept a capture of what it could not read
+    assert any("salto" in m.lower() for m in logs)
+
+
+def test_gives_up_after_several_unreadable_villages_in_a_row():
+    g = FakeGame([(None, None)] * 20)
+    bot, logs, _ = make(g, read_tries=1, unreadable_limit=3)
+    assert bot.run_once() is False
+    assert g.clicks.count("next") == 2 and g.deployed == 0
+    assert any("no se pudo leer" in m.lower() for m in logs)
+
+
+def test_a_good_read_resets_the_unreadable_streak():
+    g = FakeGame([(None, None)] * 2 + [LOW, LOW] + [(None, None)] * 2 + [GOOD, GOOD], damages=[60])
+    bot, _, _ = make(g, read_tries=1, unreadable_limit=2)
+    assert bot.run_once() is True
+    assert g.clicks.count("next") == 3 and g.deployed == 1
+
+
+def test_dry_run_reports_unreadable_without_failing():
+    g = FakeGame([(None, None)] * 4)
+    bot, logs, _ = make(g, dry_run=True, read_tries=2)
+    assert bot.run_once() is True
+    assert any("no se pudo leer" in m.lower() for m in logs)
