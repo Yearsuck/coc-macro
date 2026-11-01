@@ -17,7 +17,7 @@ gdi32 = ctypes.windll.gdi32
 kernel32 = ctypes.windll.kernel32
 user32.SetProcessDPIAware()
 
-WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
+WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL = 0x0200, 0x0201, 0x0202, 0x020A
 MK_LBUTTON = 1
 TITLE_PREFIX = "Clash of Clans"
 PROCESS_NAME = "crosvm"
@@ -139,6 +139,17 @@ def post_mouse(win: GameWindow, kind: Literal["down", "up", "move"], x: float, y
                    "up": (WM_LBUTTONUP, 0),
                    "move": (WM_MOUSEMOVE, MK_LBUTTON)}[kind]
     user32.PostMessageW(win.hwnd, msg, wparam, lparam)
+
+
+def post_wheel(win: GameWindow, x: float, y: float, delta: int) -> None:
+    """Send a wheel turn at relative (0-1) client coords. WM_MOUSEWHEEL carries SCREEN coordinates."""
+    if not user32.IsWindow(win.hwnd):
+        raise WindowNotFound("La ventana del juego se cerro")
+    ox, oy, cw, ch = client_screen_rect(win)
+    sx, sy = ox + round(x * cw), oy + round(y * ch)
+    wparam = ((delta & 0xFFFF) << 16)
+    lparam = ((sy & 0xFFFF) << 16) | (sx & 0xFFFF)
+    user32.PostMessageW(win.hwnd, WM_MOUSEWHEEL, wparam, lparam)
 
 
 def click(win: GameWindow, x: float, y: float, hold_s: float = 0.08) -> None:

@@ -10,12 +10,16 @@ from pynput import mouse
 from cocmacro import geometry, winctl
 
 
+WHEEL_DELTA = 120  # Win32 units per wheel notch
+
+
 @dataclass
 class Event:
     dt: float  # seconds since the previous event
-    kind: Literal["down", "up", "move"]
+    kind: Literal["down", "up", "move", "wheel"]
     x: float  # relative 0-1
     y: float
+    delta: int = 0  # wheel only: notches * 120, positive = away from the user
 
 
 @dataclass
@@ -60,9 +64,12 @@ class Recorder:
         return cls(lambda sx, sy: winctl.screen_to_rel(win, sx, sy), name,
                    aspect=geometry.aspect((win.client_w, win.client_h)))
 
-    def feed(self, kind: str, sx: int, sy: int, pressed: bool) -> None:
+    def feed(self, kind: str, sx: int, sy: int, pressed: bool, delta: int = 0) -> None:
         pos = self._to_rel(sx, sy)
-        if kind == "down":
+        if kind == "wheel":
+            if pos is None or delta == 0:
+                return
+        elif kind == "down":
             if pos is None:
                 return
             self._down = True
@@ -77,7 +84,7 @@ class Recorder:
         t = self._now()
         dt = 0.0 if self._last_t is None else t - self._last_t
         self._last_t, self._last_pos = t, pos
-        self._events.append(Event(dt, kind, pos[0], pos[1]))
+        self._events.append(Event(dt, kind, pos[0], pos[1], delta))
 
     def start(self) -> None:
         def on_click(x, y, button, pressed):
@@ -87,7 +94,10 @@ class Recorder:
         def on_move(x, y):
             self.feed("move", int(x), int(y), self._down)
 
-        self._listener = mouse.Listener(on_click=on_click, on_move=on_move)
+        def on_scroll(x, y, dx, dy):
+            self.feed("wheel", int(x), int(y), self._down, delta=round(dy * WHEEL_DELTA))
+
+        self._listener = mouse.Listener(on_click=on_click, on_move=on_move, on_scroll=on_scroll)
         self._listener.start()
 
     def result(self) -> Recording:

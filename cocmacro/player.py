@@ -9,7 +9,7 @@ _CHUNK = 0.1
 
 
 def play(win, rec: Recording, stop: threading.Event, sleep=time.sleep,
-         post=winctl.post_mouse) -> bool:
+         post=winctl.post_mouse, post_wheel=winctl.post_wheel) -> bool:
     """Returns False if stopped early. Never leaves the button pressed."""
     down, last = False, (0.0, 0.0)
     for ev in rec.events:
@@ -24,6 +24,9 @@ def play(win, rec: Recording, stop: threading.Event, sleep=time.sleep,
             if down:
                 post(win, "up", last[0], last[1])
             return False
+        if ev.kind == "wheel":
+            post_wheel(win, ev.x, ev.y, ev.delta)
+            continue
         post(win, ev.kind, ev.x, ev.y)
         if ev.kind == "down":
             down = True
