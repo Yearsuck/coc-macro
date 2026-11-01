@@ -36,3 +36,20 @@ def test_non_digit_shapes_are_none():
     cv2.circle(img, (110, 87), 8, (255, 255, 255), -1)       # one white blob, not a digit
     cv2.rectangle(img, (130, 78), (160, 96), (255, 255, 255), -1)
     assert ocr.read_number(img, tuple(DATA["regions"]["gold"])) is None
+
+
+@pytest.mark.parametrize("fname,seconds", [("f004.png", 28), ("f019.png", 171), ("f030.png", 162),
+                                           ("f051.png", 156), ("f052.png", 148)])
+def test_read_time_left(fname, seconds):
+    img = cv2.imread(str(FIX / fname))
+    assert ocr.read_time_left(img, tuple(DATA["regions"]["timer"])) == seconds
+
+
+def test_read_time_left_none_when_no_timer():
+    assert ocr.read_time_left(np.zeros((729, 1296, 3), np.uint8), tuple(DATA["regions"]["timer"])) is None
+
+
+@pytest.mark.parametrize("digits_before,digits_after,expected", [
+    ("2", "51", 171), ("", "45", 45), ("0", "05", 5), ("2", "75", None), ("", "", None), ("22", "10", None)])
+def test_time_from_groups(digits_before, digits_after, expected):
+    assert ocr.time_from_groups(digits_before, digits_after) == expected

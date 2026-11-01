@@ -17,6 +17,7 @@ class Game(Protocol):
     def click_button(self, name: str) -> None: ...  # battle, find, attack, next, surrender, ok, back
     def read_resources(self) -> tuple[int | None, int | None]: ...
     def read_damage(self) -> int | None: ...
+    def read_time_left(self) -> int | None: ...  # battle clock, seconds
     def play_deployment(self) -> bool: ...
 
 
@@ -94,8 +95,12 @@ class Bot:
                 self._click("back")
                 break
             pct = self.game.read_damage()
-            if decisions.should_surrender(pct, self.cfg):
-                self.log(f"Rindiendose con {pct}%")
+            left = self.game.read_time_left()
+            if decisions.should_surrender(pct, self.cfg, left):
+                if decisions.should_surrender(pct, self.cfg):
+                    self.log(f"Rindiendose con {pct}%")
+                else:
+                    self.log(f"Rindiendose por tiempo (quedan {left}s)")
                 self._click("surrender")
                 self._wait(lambda: self.game.screen_is("confirm"), "confirmar rendicion")
                 self._click("ok")

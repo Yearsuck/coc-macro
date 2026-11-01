@@ -9,8 +9,8 @@ GOOD = (600_000, 700_000)
 
 
 class FakeGame:
-    def __init__(self, reads, damages=(), results_early=False, never_scout=False, boom=False):
-        self.reads, self.damages = list(reads), list(damages)
+    def __init__(self, reads, damages=(), results_early=False, never_scout=False, boom=False, times=()):
+        self.reads, self.damages, self.times = list(reads), list(damages), list(times)
         self.results_early, self.never_scout, self.boom = results_early, never_scout, boom
         self.screen, self.clicks, self.deployed = "home", [], 0
 
@@ -38,6 +38,9 @@ class FakeGame:
         if self.results_early and not self.damages:
             self.screen = "results"
         return v
+
+    def read_time_left(self):
+        return self.times.pop(0) if self.times else None
 
     def play_deployment(self):
         self.deployed += 1
@@ -114,3 +117,26 @@ def test_dry_run_never_clicks():
     assert bot.run_once() is True
     assert g.clicks == [] and g.deployed == 0
     assert any("atacaria" in m.lower() for m in logs)
+
+
+def test_surrenders_when_time_runs_low():
+    g = FakeGame([GOOD, GOOD], damages=[10, 20], times=[170, 139])
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks == ["battle", "find", "attack", "surrender", "ok", "back"]
+    assert any("tiempo" in m.lower() for m in logs)
+
+
+def test_time_rule_disabled_falls_back_to_percent():
+    g = FakeGame([GOOD, GOOD], damages=[10, 20, 60], times=[100, 100, 100])
+    bot, _, _ = make(g)
+    bot.cfg.surrender_time_s = 0
+    assert bot.run_once() is True
+    assert g.damages == []          # all three damage reads consumed: surrendered on the %
+
+
+def test_unreadable_timer_is_ignored():
+    g = FakeGame([GOOD, GOOD], damages=[10, 60], times=[None, None])
+    bot, _, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks[-3:] == ["surrender", "ok", "back"]

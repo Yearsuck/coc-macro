@@ -52,5 +52,8 @@ class RealGame:
     def read_damage(self) -> int | None:
         return ocr.read_number(winctl.capture(self.win), self.cfg.regions["damage"])
 
+    def read_time_left(self) -> int | None:
+        return ocr.read_time_left(winctl.capture(self.win), self.cfg.regions["timer"])
+
     def play_deployment(self) -> bool:
         return player.play(self.win, self.recording, self.stop)

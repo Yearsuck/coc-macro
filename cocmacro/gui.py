@@ -6,6 +6,7 @@ from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
 from cocmacro import bot, calibrate, config, game, hotkeys, ocr, preflight, recorder, winctl
+from cocmacro.config import format_mmss, parse_mmss
 
 DATA = Path("data")
 CFG_PATH, TPL_DIR, REC_DIR = DATA / "config.json", DATA / "templates", DATA / "recordings"
@@ -40,7 +41,9 @@ class App:
         self.btn_rec = ttk.Button(f, text="Grabar despliegue", command=self.toggle_record)
         self.btn_cal = ttk.Button(f, text="Calibrar", command=self.calibrate)
         self.btn_read = ttk.Button(f, text="Leer ahora", command=self.read_now)
-        for i, b in enumerate((self.btn_start, self.btn_stop, self.btn_rec, self.btn_cal, self.btn_read)):
+        self.btn_cal_timer = ttk.Button(f, text="Calibrar reloj", command=self.calibrate_timer)
+        for i, b in enumerate((self.btn_start, self.btn_stop, self.btn_rec, self.btn_cal, self.btn_cal_timer,
+                               self.btn_read)):
             b.grid(row=0, column=i, padx=2, pady=2)
         self.dry = tk.BooleanVar()
         ttk.Checkbutton(f, text="Solo simular", variable=self.dry).grid(row=1, column=0, columnspan=2, sticky="w")
@@ -53,10 +56,14 @@ class App:
                                           ("Rendirse al %", self.pct)), start=3):
             ttk.Label(f, text=label).grid(row=r, column=0, sticky="e")
             ttk.Entry(f, textvariable=var, width=12).grid(row=r, column=1, sticky="w")
+        ttk.Label(f, text="Rendirse si quedan < (m:ss)").grid(row=6, column=0, sticky="e")
+        self.time_var = tk.StringVar(value=format_mmss(self.cfg.surrender_time_s))
+        ttk.Entry(f, textvariable=self.time_var, width=12).grid(row=6, column=1, sticky="w")
+        ttk.Label(f, text="(0:00 = desactivado)").grid(row=6, column=2, sticky="w")
         self.counter = ttk.Label(f, text="Ataques: 0")
         self.counter.grid(row=3, column=3, columnspan=2)
         self.logbox = scrolledtext.ScrolledText(f, width=70, height=16, state="disabled")
-        self.logbox.grid(row=6, column=0, columnspan=5, pady=6)
+        self.logbox.grid(row=7, column=0, columnspan=6, pady=6)
 
     # -- helpers -------------------------------------------------------
     def log(self, msg: str):
@@ -98,6 +105,11 @@ class App:
             self.cfg.surrender_pct = int(self.pct.get())
         except ValueError:
             messagebox.showerror("CoC Macro", "Oro, elixir y % deben ser numeros enteros")
+            return False
+        try:
+            self.cfg.surrender_time_s = parse_mmss(self.time_var.get())
+        except ValueError as e:
+            messagebox.showerror("CoC Macro", str(e))
             return False
         self.cfg.deployment = self.combo.get() or self.cfg.deployment
         DATA.mkdir(exist_ok=True)
@@ -187,12 +199,23 @@ class App:
             self.log("Calibracion terminada")
         self._worker(job)
 
+    def calibrate_timer(self):
+        def job():
+            win = winctl.find_game_window()
+            self.log("[timer] Entra en una batalla y arrastra un rectangulo sobre el reloj (ej. 2m 51s)")
+            self.cfg = calibrate.run_step(win, self.cfg, "timer", "region", TPL_DIR)
+            DATA.mkdir(exist_ok=True)
+            config.save(self.cfg, CFG_PATH)
+            self.log("Reloj calibrado")
+        self._worker(job)
+
     def read_now(self):
         def job():
             win = winctl.find_game_window()
             frame = winctl.capture(win)
             vals = {k: ocr.read_number(frame, self.cfg.regions[k])
                     for k in ("gold", "elixir", "damage") if k in self.cfg.regions}
+            vals["timer"] = ocr.read_time_left(frame, self.cfg.regions["timer"]) if "timer" in self.cfg.regions else None
             self.log(f"Lectura: {vals}")
         self._worker(job)
 

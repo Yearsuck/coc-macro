@@ -1,3 +1,5 @@
+import pytest
+
 from cocmacro import config
 
 
@@ -11,7 +13,32 @@ def test_config_defaults(tmp_path):
 def test_config_save_load(tmp_path):
     cfg = config.Config(gold_min=700000, surrender_pct=60, aspect=1.78,
                         buttons={"battle": (0.05, 0.9)},
-                        regions={"gold": (0.8, 0.05, 0.9, 0.1)})
+                        regions={"gold": (0.8, 0.05, 0.9, 0.1), "timer": (0.45, 0.04, 0.55, 0.08)})
     p = tmp_path / "c.json"
     config.save(cfg, p)
     assert config.load(p) == cfg
+
+
+def test_default_time_and_timer_region(tmp_path):
+    cfg = config.load(tmp_path / "missing.json")
+    assert cfg.surrender_time_s == 140
+    assert "timer" in cfg.regions
+
+
+def test_old_config_gets_timer_region(tmp_path):
+    p = tmp_path / "old.json"
+    p.write_text('{"gold_min": 1, "regions": {"gold": [0.1, 0.1, 0.2, 0.2]}}')
+    cfg = config.load(p)
+    assert cfg.regions["gold"] == (0.1, 0.1, 0.2, 0.2)
+    assert cfg.regions["timer"] == config.DEFAULT_REGIONS["timer"]
+    assert cfg.surrender_time_s == 140
+
+
+def test_parse_mmss():
+    assert config.parse_mmss("2:20") == 140
+    assert config.parse_mmss("0:45") == 45
+    assert config.parse_mmss("") == 0
+    for bad in ("2:75", "abc", "2:", "-1:00"):
+        with pytest.raises(ValueError):
+            config.parse_mmss(bad)
+    assert config.format_mmss(140) == "2:20"

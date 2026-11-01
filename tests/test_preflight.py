@@ -5,7 +5,7 @@ from cocmacro.recorder import Event, Recording
 
 WIN = winctl.GameWindow(1, 1296, 729)
 BTN = {n: (0.5, 0.5) for n in ["battle", "find", "attack", "next", "surrender", "ok", "back"]}
-REG = {n: (0.1, 0.1, 0.2, 0.2) for n in ["gold", "elixir", "damage"]}
+REG = {n: (0.1, 0.1, 0.2, 0.2) for n in ["gold", "elixir", "damage", "timer"]}
 
 
 def good_cfg(**kw):

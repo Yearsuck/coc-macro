@@ -10,7 +10,7 @@ from cocmacro import geometry, templates, winctl
 from cocmacro.config import Config
 
 BUTTONS = ["battle", "find", "attack", "next", "surrender", "ok", "back"]
-REGIONS = ["gold", "elixir", "damage"]
+REGIONS = ["gold", "elixir", "damage", "timer"]
 
 # (name, kind, instruction shown to the user), in the order of one real attack
 STEPS: list[tuple[str, str, str]] = [
@@ -21,6 +21,7 @@ STEPS: list[tuple[str, str, str]] = [
     ("elixir", "region", "Arrastra un rectangulo sobre el numero de ELIXIR"),
     ("next", "button", "Haz clic en Siguiente"),
     ("damage", "region", "Despliega una tropa y arrastra un rectangulo sobre el % de dano"),
+    ("timer", "region", "Arrastra un rectangulo sobre el reloj de la batalla (ej. 2m 51s)"),
     ("surrender", "button", "Haz clic en Rendirse"),
     ("ok", "button", "Haz clic en Vale"),
     ("back", "button", "Haz clic en Volver"),
