@@ -8,6 +8,7 @@ from cocmacro.config import Config
 from cocmacro.winctl import WindowMinimized, WindowNotFound
 
 POLL = 0.5
+REPORT_EVERY = 20   # polls (10 s) between 'still waiting' messages
 READ_GAP = 0.4
 MAX_READ_TRIES = 20
 
@@ -41,10 +42,12 @@ class Bot:
             raise _Abort("Detenido")
 
     def _wait(self, pred: Callable[[], bool], what: str) -> None:
-        for _ in range(max(1, int(self.timeout_s / POLL))):
+        for i in range(max(1, int(self.timeout_s / POLL))):
             self._check()
             if pred():
                 return
+            if i and i % REPORT_EVERY == 0:
+                self.log(f"Sigo esperando: {what} ({i * POLL:.0f}s)")
             self.sleep(POLL)
         raise _Abort(f"Tiempo agotado esperando: {what}")
 
