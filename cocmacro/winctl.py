@@ -156,3 +156,11 @@ def screen_to_rel(win: GameWindow, sx: int, sy: int) -> tuple[float, float] | No
     if 0 <= x < cw and 0 <= y < ch:
         return x / cw, y / ch
     return None
+
+
+def client_screen_rect(win: GameWindow) -> tuple[int, int, int, int]:
+    """(x, y, width, height) of the client area in screen pixels."""
+    pt = wintypes.POINT(0, 0)
+    user32.ClientToScreen(win.hwnd, ctypes.byref(pt))
+    cw, ch = _client_size(win.hwnd)
+    return pt.x, pt.y, cw, ch
