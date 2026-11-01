@@ -125,7 +125,7 @@ def read_crop(crop: np.ndarray) -> int | None:
         glyphs = segment(crop, thresh)
         chars = [classify(g) for g in glyphs]
         if glyphs and None not in chars:
-            value = parse_digits("".join(chars))
+            value = parse_digits("".join(chars).removesuffix("%"))      # the damage zone often includes the % sign
             if value is not None:
                 reads.add(value)
     return reads.pop() if len(reads) == 1 else None      # a disagreement between cuts is not a reading
