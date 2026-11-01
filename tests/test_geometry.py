@@ -11,3 +11,7 @@ def test_roundtrip_px_rel():
 
 def test_aspect():
     assert geometry.aspect((1296, 729)) == 1296 / 729
+
+
+def test_rect_to_px():
+    assert geometry.rect_to_px((0.1, 0.2, 0.5, 0.6), (1000, 500)) == (100, 100, 500, 300)
