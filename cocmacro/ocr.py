@@ -12,7 +12,9 @@ import cv2
 import numpy as np
 
 GLYPH_FILE = Path(__file__).with_name("glyphs.npz")
-THRESH = 150          # min(B,G,R) above this = white text
+THRESH = 190          # min(B,G,R) above this = white text (also the one the glyph samples are cut with)
+FALLBACK_THRESH = (170, 150, 205)   # light village skins merge background into the digits at one cut or another
+CLOCK_THRESH = 150    # the battle clock sits on a dark bar
 GW, GH = 12, 18       # normalised glyph size
 MAX_DIST = 0.28       # mean abs diff above this -> glyph unknown -> None
 ASPECT_W = 0.5
@@ -57,9 +59,9 @@ def _split_touching(patch: np.ndarray, ref_w: float) -> list[np.ndarray]:
     return out or [patch]
 
 
-def segment(crop: np.ndarray) -> list[np.ndarray]:
+def segment(crop: np.ndarray, thresh: int = THRESH) -> list[np.ndarray]:
     """Left-to-right list of binary glyph images (tight bounding boxes)."""
-    mask = (crop.min(axis=2) > THRESH).astype(np.uint8)
+    mask = (crop.min(axis=2) > thresh).astype(np.uint8)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     comps = [(stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_WIDTH],
               stats[i, cv2.CC_STAT_HEIGHT], i) for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 6]
@@ -118,13 +120,15 @@ def read_crop(crop: np.ndarray) -> int | None:
     """Digits in an already cropped region of the loot / damage numbers."""
     if not _usable(crop):
         return None
-    glyphs = segment(crop)
-    if not glyphs:
-        return None
-    chars = [classify(g) for g in glyphs]
-    if None in chars:
-        return None
-    return parse_digits("".join(chars))
+    reads = set()
+    for thresh in (THRESH, *FALLBACK_THRESH):
+        glyphs = segment(crop, thresh)
+        chars = [classify(g) for g in glyphs]
+        if glyphs and None not in chars:
+            value = parse_digits("".join(chars).removesuffix("%"))      # the damage zone often includes the % sign
+            if value is not None:
+                reads.add(value)
+    return reads.pop() if len(reads) == 1 else None      # a disagreement between cuts is not a reading
 
 
 def read_number(img: np.ndarray, region: tuple[float, float, float, float]) -> int | None:
@@ -152,7 +156,7 @@ def read_time_left(img: np.ndarray, region: tuple[float, float, float, float]) -
     crop = _crop(img, region)
     if not _usable(crop):
         return None
-    mask = (crop.min(axis=2) > THRESH).astype(np.uint8)
+    mask = (crop.min(axis=2) > CLOCK_THRESH).astype(np.uint8)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     comps = [(stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_WIDTH],
               stats[i, cv2.CC_STAT_HEIGHT], i) for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 6]
