@@ -140,3 +140,11 @@ def test_unreadable_timer_is_ignored():
     bot, _, _ = make(g)
     assert bot.run_once() is True
     assert g.clicks[-3:] == ["surrender", "ok", "back"]
+
+
+def test_long_waits_are_reported_not_silent():
+    g = FakeGame([], never_scout=True)
+    bot, logs, _ = make(g, timeout_s=25)
+    assert bot.run_once() is False
+    waiting = [m for m in logs if "esperando" in m.lower() and "aldea enemiga" in m.lower()]
+    assert len(waiting) >= 2          # reported at 10 s and 20 s before giving up at 25 s
