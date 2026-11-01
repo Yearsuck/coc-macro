@@ -12,7 +12,7 @@ from cocmacro.recorder import Recording
 # Template(s) whose presence identifies each screen.
 SCREEN_TEMPLATES = {"home": ["battle"], "scout": ["next"], "confirm": ["ok"], "results": ["back"]}
 ASPECT_TOLERANCE = 0.02
-DEBUG_KEEP = 30     # newest debug images kept
+DEBUG_KEEP = 60     # newest debug images kept
 
 
 class CalibrationMismatch(Exception):
@@ -64,14 +64,14 @@ class RealGame:
         return player.play(self.win, self.recording, self.stop)
 
     def dump_debug(self, reason: str) -> None:
-        """Save the full frame and the gold/elixir crops of what could not be read (kept locally)."""
+        """Save the full frame and the number crops of what could not be read (kept locally)."""
         if self.debug_dir is None:
             return
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         stamp = f"{time.strftime('%H%M%S')}_{time.time_ns() % 10**9}"
         frame = frames.grab(self.win)
         cv2.imwrite(str(self.debug_dir / f"{stamp}_{reason}_frame.png"), frame)
-        for k in ("gold", "elixir"):
+        for k in ("gold", "elixir", "damage", "timer"):
             if k in self.cfg.regions:
                 cv2.imwrite(str(self.debug_dir / f"{stamp}_{reason}_{k}.png"), ocr._crop(frame, self.cfg.regions[k]))
         for old in sorted(self.debug_dir.iterdir(), key=lambda p: p.stat().st_mtime)[:-DEBUG_KEEP]:
