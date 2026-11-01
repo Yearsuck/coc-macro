@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 from pynput import mouse
 
-from cocmacro import geometry, templates, winctl
+from cocmacro import frames, geometry, templates, winctl
+from cocmacro import config
 from cocmacro.config import Config
 
 BUTTONS = ["battle", "find", "attack", "next", "surrender", "ok", "back"]
@@ -36,7 +37,7 @@ def _wait_press_release(win: winctl.GameWindow, need_release: bool, timeout: flo
             return
         pos = winctl.screen_to_rel(win, int(x), int(y))
         if pressed and pos is not None and "down" not in state:
-            state["down"], state["frame"] = pos, winctl.capture(win)  # before the game reacts
+            state["down"], state["frame"] = pos, frames.grab(win)  # before the game reacts
             if not need_release:
                 done.set()
         elif not pressed and "down" in state:
@@ -58,10 +59,16 @@ def capture_click(win: winctl.GameWindow, timeout: float = 120) -> tuple[tuple[f
     return s["down"], s["frame"]
 
 
+def validate_rect(rect: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    if not config.region_ok(rect):
+        raise ValueError("No se detecto un arrastre: arrastra un rectangulo sobre la zona (un clic no vale)")
+    return rect
+
+
 def capture_rect(win: winctl.GameWindow, timeout: float = 120) -> tuple[tuple[float, float, float, float], np.ndarray]:
     s = _wait_press_release(win, need_release=True, timeout=timeout)
     (x0, y0), (x1, y1) = s["down"], s["up"]
-    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)), s["frame"]
+    return validate_rect((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))), s["frame"]
 
 
 def run_step(win: winctl.GameWindow, cfg: Config, name: str, kind: str, tpl_dir: Path) -> Config:

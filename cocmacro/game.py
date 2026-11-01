@@ -2,7 +2,7 @@
 import threading
 from pathlib import Path
 
-from cocmacro import geometry, ocr, player, templates, winctl
+from cocmacro import frames, geometry, ocr, player, templates, winctl
 from cocmacro.config import Config
 from cocmacro.recorder import Recording
 
@@ -34,7 +34,7 @@ class RealGame:
         return templates.match(frame, name, self.tpl_dir)
 
     def screen_is(self, name: str) -> bool:
-        frame = winctl.capture(self.win)
+        frame = frames.grab(self.win)
         if name == "battle":
             # Rendirse (<50%) or Terminar batalla (>=50%); both also show on the scout screen
             return (self._has(frame, "surrender") or self._has(frame, "end")) and not self._has(frame, "next")
@@ -45,15 +45,15 @@ class RealGame:
         winctl.click(self.win, x, y)
 
     def read_resources(self) -> tuple[int | None, int | None]:
-        frame = winctl.capture(self.win)
+        frame = frames.grab(self.win)
         return (ocr.read_number(frame, self.cfg.regions["gold"]),
                 ocr.read_number(frame, self.cfg.regions["elixir"]))
 
     def read_damage(self) -> int | None:
-        return ocr.read_number(winctl.capture(self.win), self.cfg.regions["damage"])
+        return ocr.read_number(frames.grab(self.win), self.cfg.regions["damage"])
 
     def read_time_left(self) -> int | None:
-        return ocr.read_time_left(winctl.capture(self.win), self.cfg.regions["timer"])
+        return ocr.read_time_left(frames.grab(self.win), self.cfg.regions["timer"])
 
     def play_deployment(self) -> bool:
         return player.play(self.win, self.recording, self.stop)

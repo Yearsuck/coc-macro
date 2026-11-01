@@ -24,6 +24,11 @@ class Config:
     tpl_size: tuple[float, float] = (0.06, 0.07)
 
 
+def region_ok(r: tuple[float, float, float, float]) -> bool:
+    """A real rectangle (at least ~13x7 px at 1296x729), not a click or an inverted drag."""
+    return (r[2] - r[0]) >= 0.01 and (r[3] - r[1]) >= 0.01
+
+
 def load(path: Path) -> Config:
     path = Path(path)
     if not path.exists():
@@ -34,7 +39,8 @@ def load(path: Path) -> Config:
     cfg.buttons = {k: tuple(v) for k, v in cfg.buttons.items()}
     cfg.regions = {k: tuple(v) for k, v in cfg.regions.items()}
     for k, v in DEFAULT_REGIONS.items():
-        cfg.regions.setdefault(k, v)
+        if k not in cfg.regions or not region_ok(cfg.regions[k]):
+            cfg.regions[k] = v
     cfg.tpl_size = tuple(cfg.tpl_size)
     return cfg
 

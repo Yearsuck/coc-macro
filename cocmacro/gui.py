@@ -6,8 +6,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
-from cocmacro import (__version__, bot, calibrate, config, game, hotkeys, ocr, paths, preflight,
-                      recorder, updater, winctl)
+from cocmacro import (__version__, bot, calibrate, config, frames, game, hotkeys, ocr, paths,
+                      preflight, recorder, updater, winctl)
 from cocmacro.config import format_mmss, parse_mmss
 
 DATA = paths.data_dir()
@@ -228,7 +228,7 @@ class App:
     def read_now(self):
         def job():
             win = winctl.find_game_window()
-            frame = winctl.capture(win)
+            frame = frames.grab(win)
             vals = {k: ocr.read_number(frame, self.cfg.regions[k])
                     for k in ("gold", "elixir", "damage") if k in self.cfg.regions}
             vals["timer"] = ocr.read_time_left(frame, self.cfg.regions["timer"]) if "timer" in self.cfg.regions else None
