@@ -36,14 +36,32 @@ class Bot:
                  stop: threading.Event, sleep=time.sleep, timeout_s: float = 60,
                  dry_run: bool = False, battle_timeout_s: float = 240,
                  step_delay: float = 1.0, read_tries: int = MAX_READ_TRIES,
-                 unreadable_limit: int = UNREADABLE_LIMIT):
+                 unreadable_limit: int = UNREADABLE_LIMIT,
+                 on_phase: Callable[[str], None] | None = None,
+                 on_reading: Callable[[dict], None] | None = None):
         self.game, self.cfg, self.log, self.stop = game, cfg, log, stop
         self.sleep, self.timeout_s, self.dry_run = sleep, timeout_s, dry_run
         self.battle_timeout_s, self.step_delay = battle_timeout_s, step_delay
         self.read_tries, self.unreadable_limit = read_tries, unreadable_limit
+        self.on_phase, self.on_reading, self._reading_state = on_phase, on_reading, {}
         self.attacks_done = 0
 
     # -- helpers -------------------------------------------------------
+    def _phase(self, name: str) -> None:
+        if self.on_phase:
+            try:
+                self.on_phase(name)
+            except Exception:
+                pass     # the window must never break the run
+
+    def _reading(self, **values) -> None:
+        self._reading_state.update(values)
+        if self.on_reading:
+            try:
+                self.on_reading(dict(self._reading_state))
+            except Exception:
+                pass
+
     def _check(self) -> None:
         if self.stop.is_set():
             raise _Abort("Detenido")
@@ -97,12 +115,15 @@ class Bot:
             self.log(f"[simulacion] oro {gold} elixir {elixir}: {verdict}")
             return
         self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio")
+        self._phase("search")
         for name in ("battle", "find", "attack"):
             self._click(name)
             self.sleep(self.step_delay)
         unreadable = 0
         while True:
             self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga")
+            self._phase("evaluate")
+            self._reading(gold=None, elixir=None, verdict=None, damage=None, time_left=None)
             try:
                 gold, elixir = self._stable_read()
             except _Unreadable:
@@ -116,6 +137,8 @@ class Bot:
                 self.sleep(self.step_delay)
                 continue
             unreadable = 0
+            self._reading(gold=gold, elixir=elixir,
+                          verdict="attack" if decisions.should_attack(gold, elixir, self.cfg) else "skip")
             if decisions.should_attack(gold, elixir, self.cfg):
                 self.log(f"Atacando: oro {gold}, elixir {elixir}")
                 break
@@ -123,25 +146,31 @@ class Bot:
             self._click("next")
             self.sleep(self.step_delay)
         self._check()
+        self._phase("deploy")
         if not self.game.play_deployment():
             raise _Abort("Despliegue interrumpido")
         for _ in range(max(1, int(self.battle_timeout_s / POLL))):
             self._check()
             if self.game.screen_is("results"):
                 self.log("La batalla termino sola")
+                self._phase("back")
                 self._click("back")
                 break
+            self._phase("watch")
             pct = self.game.read_damage()
             left = self.game.read_time_left()
+            self._reading(damage=pct, time_left=left)
             if decisions.should_surrender(pct, self.cfg, left):
                 if decisions.should_surrender(pct, self.cfg):
                     self.log(f"Rindiendose con {pct}%")
                 else:
                     self.log(f"Rindiendose por tiempo (quedan {left}s)")
+                self._phase("surrender")
                 self._click("surrender")
                 self._wait(lambda: self.game.screen_is("confirm"), "confirmar rendicion")
                 self._click("ok")
                 self._wait(lambda: self.game.screen_is("results"), "pantalla de resultados")
+                self._phase("back")
                 self._click("back")
                 break
             self.sleep(POLL)
