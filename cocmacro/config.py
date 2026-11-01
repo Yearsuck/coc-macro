@@ -6,7 +6,12 @@ from pathlib import Path
 
 
 # battle clock ("La batalla acaba en: 2m 51s"), measured on real captures
-DEFAULT_REGIONS = {"timer": (0.451, 0.045, 0.552, 0.082)}
+DEFAULT_REGIONS = {
+    "gold": (0.040, 0.106, 0.135, 0.133),     # loot digits on the village-search screen
+    "elixir": (0.040, 0.145, 0.135, 0.178),
+    "damage": (0.922, 0.774, 0.971, 0.809),   # "Dano total" percentage
+    "timer": (0.451, 0.045, 0.552, 0.082),
+}
 
 
 @dataclass

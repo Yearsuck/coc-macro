@@ -19,11 +19,11 @@ STEPS: list[tuple[str, str, str]] = [
     ("battle", "button", "Haz clic en Batalla"),
     ("find", "button", "Haz clic en Buscar batalla"),
     ("attack", "button", "Haz clic en Atacar"),
-    ("gold", "region", "En la aldea enemiga, arrastra un rectangulo sobre el numero de ORO"),
-    ("elixir", "region", "Arrastra un rectangulo sobre el numero de ELIXIR"),
+    ("gold", "region", "Arrastra un rectangulo SOLO sobre las cifras del ORO (guiate por el recuadro punteado)"),
+    ("elixir", "region", "Arrastra un rectangulo SOLO sobre las cifras del ELIXIR (recuadro punteado)"),
     ("next", "button", "Haz clic en Siguiente"),
-    ("damage", "region", "Despliega una tropa y arrastra un rectangulo sobre el % de dano"),
-    ("timer", "region", "Arrastra un rectangulo sobre el reloj de la batalla (ej. 2m 51s)"),
+    ("damage", "region", "Despliega una tropa y arrastra un rectangulo sobre el % de dano (recuadro punteado)"),
+    ("timer", "region", "Arrastra un rectangulo sobre el reloj de la batalla, ej. 2m 51s (recuadro punteado)"),
     ("surrender", "button", "Haz clic en Rendirse"),
     ("ok", "button", "Haz clic en Vale"),
     ("back", "button", "Haz clic en Volver"),
@@ -95,6 +95,11 @@ def _wait_press_release(win: winctl.GameWindow, need_release: bool, timeout: flo
 def capture_click(win: winctl.GameWindow, timeout: float = 120) -> tuple[tuple[float, float], np.ndarray]:
     s = _wait_press_release(win, need_release=False, timeout=timeout)
     return s["down"], s["frame"]
+
+
+def suggested_region(name: str):
+    """Where the zone normally is (measured on real captures); drawn as a guide while calibrating."""
+    return config.DEFAULT_REGIONS.get(name)
 
 
 def validate_rect(rect: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
