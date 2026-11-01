@@ -145,3 +145,14 @@ def click(win: GameWindow, x: float, y: float, hold_s: float = 0.08) -> None:
     post_mouse(win, "down", x, y)
     time.sleep(hold_s)
     post_mouse(win, "up", x, y)
+
+
+def screen_to_rel(win: GameWindow, sx: int, sy: int) -> tuple[float, float] | None:
+    """Screen pixel -> relative client coords, None if outside the client area."""
+    pt = wintypes.POINT(0, 0)
+    user32.ClientToScreen(win.hwnd, ctypes.byref(pt))
+    cw, ch = _client_size(win.hwnd)
+    x, y = sx - pt.x, sy - pt.y
+    if 0 <= x < cw and 0 <= y < ch:
+        return x / cw, y / ch
+    return None
