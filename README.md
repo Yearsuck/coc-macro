@@ -5,7 +5,7 @@ running in **Google Play Games for PC**, with the game window in the background.
 
 - Clicks the fixed buttons (Batalla → Buscar batalla → Atacar) and reads the loot of each village
   (gold and elixir). It presses **Siguiente** until both are above your minimum.
-- Replays a **deployment you recorded** (your own clicks and pauses).
+- Replays a **deployment you recorded** (your own clicks, drags, mouse-wheel turns and pauses).
 - Surrenders when the damage passes a % **or** the battle clock drops below a set time.
 - Stops on **F8** at any time; **F9** ends a deployment recording.
 
