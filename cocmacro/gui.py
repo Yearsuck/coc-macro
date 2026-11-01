@@ -5,10 +5,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
-from cocmacro import bot, calibrate, config, game, hotkeys, ocr, preflight, recorder, winctl
+from cocmacro import bot, calibrate, config, game, hotkeys, ocr, paths, preflight, recorder, winctl
 from cocmacro.config import format_mmss, parse_mmss
 
-DATA = Path("data")
+DATA = paths.data_dir()
 CFG_PATH, TPL_DIR, REC_DIR = DATA / "config.json", DATA / "templates", DATA / "recordings"
 WARNING = ("Supercell prohibe automatizar ataques con macros.\n"
            "Usar esta app puede suponer el BAN de tu cuenta. Lo haces bajo tu responsabilidad.\n\n"
