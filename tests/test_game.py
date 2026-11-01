@@ -71,7 +71,7 @@ def test_dump_debug_keeps_what_it_could_not_read_and_prunes(tmp_path, monkeypatc
     g.debug_dir = tmp_path / "debug"
     g.dump_debug("loot")
     names = sorted(p.name for p in g.debug_dir.iterdir())
-    assert len(names) == 3 and any("gold" in n for n in names) and any("elixir" in n for n in names)
+    assert len(names) == 4 and any("damage" in n for n in names) and any("gold" in n for n in names) and any("elixir" in n for n in names)
     for _ in range(14):
         g.dump_debug("loot")
     assert len(list(g.debug_dir.iterdir())) == game.DEBUG_KEEP

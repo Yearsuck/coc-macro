@@ -11,6 +11,7 @@ POLL = 0.5
 REPORT_EVERY = 20   # polls (10 s) between 'still waiting' messages
 READ_GAP = 0.4
 MAX_READ_TRIES = 10
+BLIND_POLLS = 40         # battle polls (20 s) with no damage reading before a debug capture is kept
 UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before giving up
 
 
@@ -149,6 +150,7 @@ class Bot:
         self._phase("deploy")
         if not self.game.play_deployment():
             raise _Abort("Despliegue interrumpido")
+        blind = 0
         for _ in range(max(1, int(self.battle_timeout_s / POLL))):
             self._check()
             if self.game.screen_is("results"):
@@ -160,6 +162,10 @@ class Bot:
             pct = self.game.read_damage()
             left = self.game.read_time_left()
             self._reading(damage=pct, time_left=left)
+            blind = 0 if pct is not None else blind + 1
+            if blind == BLIND_POLLS:
+                self.log("No consigo leer el daño; guardo una captura en data/debug")
+                self._dump("damage")
             if decisions.should_surrender(pct, self.cfg, left):
                 if decisions.should_surrender(pct, self.cfg):
                     self.log(f"Rindiendose con {pct}%")
