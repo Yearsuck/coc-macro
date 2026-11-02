@@ -87,6 +87,6 @@ def test_why_not_reports_template_scores(tmp_path, monkeypatch):
     templates.save_template("next", scout, (0.909, 0.7517), (0.06, 0.07), tmp_path)
     g, _ = make(tmp_path, monkeypatch, "f052.png")             # a battle frame: no 'Siguiente' on it
     text = g.why_not("scout")
-    assert "next" in text and "0.85" in text and "1296x729" in text
+    assert "next" in text and f"{templates.THRESHOLD:.2f}" in text and "1296x729" in text
     g2, _ = make(tmp_path / "vacio", monkeypatch, "f004.png")
     assert "falta" in g2.why_not("scout")                      # no template saved at all
