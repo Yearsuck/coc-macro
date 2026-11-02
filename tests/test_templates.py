@@ -42,3 +42,11 @@ def test_next_button_ignores_the_price_line(tmp_path):
 
 def test_other_buttons_are_still_matched_whole(tmp_path):
     assert templates.match(_price_case(tmp_path, "ok"), "ok", tmp_path) is False
+
+
+def test_score_gives_value_and_place(tmp_path):
+    frame = noise(1)
+    templates.save_template("next", frame, (0.5, 0.5), (0.2, 0.3), tmp_path)
+    score, (x, y) = templates.score(frame, "next", tmp_path)
+    assert score > 0.99 and abs(x - 0.5) < 0.1 and abs(y - 0.5) < 0.1      # centre of the match, relative
+    assert templates.score(frame, "nada", tmp_path) is None

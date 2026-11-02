@@ -67,13 +67,22 @@ class Bot:
         if self.stop.is_set():
             raise _Abort("Detenido")
 
-    def _wait(self, pred: Callable[[], bool], what: str) -> None:
+    def _why(self, screen: str | None) -> str:
+        fn = getattr(self.game, "why_not", None)
+        if not fn or not screen:
+            return ""
+        try:
+            return f" - {fn(screen)}"
+        except Exception:
+            return ""
+
+    def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None) -> None:
         for i in range(max(1, int(self.timeout_s / POLL))):
             self._check()
             if pred():
                 return
             if i and i % REPORT_EVERY == 0:
-                self.log(f"Sigo esperando: {what} ({i * POLL:.0f}s)")
+                self.log(f"Sigo esperando: {what} ({i * POLL:.0f}s){self._why(screen)}")
             self.sleep(POLL)
         raise _Abort(f"Tiempo agotado esperando: {what}")
 
@@ -115,14 +124,14 @@ class Bot:
             verdict = "atacaria" if decisions.should_attack(gold, elixir, self.cfg) else "pasaria (Siguiente)"
             self.log(f"[simulacion] oro {gold} elixir {elixir}: {verdict}")
             return
-        self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio")
+        self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home")
         self._phase("search")
         for name in ("battle", "find", "attack"):
             self._click(name)
             self.sleep(self.step_delay)
         unreadable = 0
         while True:
-            self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga")
+            self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga", "scout")
             self._phase("evaluate")
             self._reading(gold=None, elixir=None, verdict=None, damage=None, time_left=None)
             try:
@@ -173,16 +182,16 @@ class Bot:
                     self.log(f"Rindiendose por tiempo (quedan {left}s)")
                 self._phase("surrender")
                 self._click("surrender")
-                self._wait(lambda: self.game.screen_is("confirm"), "confirmar rendicion")
+                self._wait(lambda: self.game.screen_is("confirm"), "confirmar rendicion", "confirm")
                 self._click("ok")
-                self._wait(lambda: self.game.screen_is("results"), "pantalla de resultados")
+                self._wait(lambda: self.game.screen_is("results"), "pantalla de resultados", "results")
                 self._phase("back")
                 self._click("back")
                 break
             self.sleep(POLL)
         else:
             raise _Abort("Tiempo agotado esperando el final de la batalla")
-        self._wait(lambda: self.game.screen_is("home"), "volver a la aldea")
+        self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home")
 
     def run_once(self) -> bool:
         try:
