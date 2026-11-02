@@ -16,8 +16,9 @@ running in **Google Play Games for PC**, with the game window in the background.
 
 1. Download `CoCMacro.exe` from the Releases page (or run `python -m cocmacro`).
 2. Open Clash of Clans in Google Play Games, keep the window not minimised.
-3. **Calibrar**: do one normal attack by hand while following the prompts (buttons and the
-   rectangles where gold, elixir, damage % and the clock are read).
+3. **Calibrar**: a ready-made calibration ships with the app (Spanish game, 16:9 window), so you can skip this.
+   If the game is in another language or the window has another shape, do one normal attack by hand while
+   following the prompts (buttons and the rectangles where gold, elixir, damage % and the clock are read).
 4. **Grabar despliegue**: deploy your troops once; press F9 to finish.
 5. Set minimums and surrender rules, then **Empezar**. Tick *Solo simular* first to check the reading.
 
