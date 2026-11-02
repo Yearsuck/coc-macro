@@ -24,7 +24,7 @@ def save_template(name: str, frame: np.ndarray, center: tuple[float, float],
     cv2.imwrite(str(_path(name, dir)), frame[y0:y1, x0:x1])
 
 
-THRESHOLD = 0.85
+THRESHOLD = 0.75
 
 
 def score(frame: np.ndarray, name: str, dir: Path) -> tuple[float, tuple[float, float]] | None:
