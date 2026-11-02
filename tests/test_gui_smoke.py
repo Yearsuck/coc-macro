@@ -48,7 +48,17 @@ def calibrated(app):
     recorder.save_recording(Recording("d", 1.78, [Event(0.0, "down", 0.5, 0.5)]), gui.REC_DIR)
 
 
-def test_nothing_calibrated_shows_the_setup_screen(app):
+def test_fresh_install_only_needs_a_deployment(app):
+    """The shipped calibration is applied on first start: only the deployment is left to record."""
+    assert app.mode == "setup"
+    assert app.setup_title.cget("text") == "Falta preparar 1 paso"
+    assert gui.CFG_PATH.exists() and (gui.TPL_DIR / "next.png").exists()
+
+
+def test_nothing_calibrated_shows_the_setup_screen(app, monkeypatch):
+    app.cfg = config.Config()
+    monkeypatch.setattr(gui.defaults, "apply", lambda cfg, tpl: False)
+    app.refresh_state()
     assert app.mode == "setup"
     assert app.setup_title.cget("text") == "Falta preparar 2 pasos"
     assert str(app.setup.winfo_manager()) == "pack" and not app.state.winfo_manager()
