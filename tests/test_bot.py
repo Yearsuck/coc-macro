@@ -213,3 +213,11 @@ def test_unreadable_damage_is_logged_and_dumped_once():
     assert bot.run_once() is True
     assert g.dumped == ["damage"]
     assert sum("daño" in m.lower() for m in logs) == 1
+
+
+def test_waiting_message_says_why_the_screen_is_not_recognised():
+    g = FakeGame([], never_scout=True)
+    g.why_not = lambda name: f"{name} 0.31 de 0.85"
+    bot, logs, _ = make(g, timeout_s=11)
+    bot.run_once()
+    assert any("Sigo esperando: aldea enemiga" in m and "scout 0.31 de 0.85" in m for m in logs)

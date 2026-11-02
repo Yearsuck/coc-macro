@@ -24,15 +24,26 @@ def save_template(name: str, frame: np.ndarray, center: tuple[float, float],
     cv2.imwrite(str(_path(name, dir)), frame[y0:y1, x0:x1])
 
 
-def match(frame: np.ndarray, name: str, dir: Path, threshold: float = 0.85) -> bool:
+THRESHOLD = 0.75
+
+
+def score(frame: np.ndarray, name: str, dir: Path) -> tuple[float, tuple[float, float]] | None:
+    """Best match of the saved button on the frame: (similarity 0-1, relative centre). None if unusable."""
     p = _path(name, dir)
     if not p.exists():
-        return False
+        return None
     tpl = cv2.imread(str(p))
     keep = LABEL_ONLY.get(name)
     if keep and tpl is not None:
         tpl = tpl[: max(8, int(tpl.shape[0] * keep))]
     if tpl is None or tpl.shape[0] > frame.shape[0] or tpl.shape[1] > frame.shape[1]:
-        return False
+        return None
     res = cv2.matchTemplate(frame, tpl, cv2.TM_CCOEFF_NORMED)
-    return float(res.max()) >= threshold
+    _, best, _, (x, y) = cv2.minMaxLoc(res)
+    h, w = frame.shape[:2]
+    return float(best), ((x + tpl.shape[1] / 2) / w, (y + tpl.shape[0] / 2) / h)
+
+
+def match(frame: np.ndarray, name: str, dir: Path, threshold: float = THRESHOLD) -> bool:
+    found = score(frame, name, dir)
+    return found is not None and found[0] >= threshold
