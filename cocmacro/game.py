@@ -45,6 +45,20 @@ class RealGame:
             return (self._has(frame, "surrender") or self._has(frame, "end")) and not self._has(frame, "next")
         return any(self._has(frame, t) for t in SCREEN_TEMPLATES[name])
 
+    def why_not(self, name: str) -> str:
+        """Why the screen is not recognised: similarity of each template that identifies it."""
+        frame = frames.grab(self.win)
+        names = ["surrender", "end"] if name == "battle" else SCREEN_TEMPLATES[name]
+        parts = []
+        for t in names:
+            found = templates.score(frame, t, self.tpl_dir)
+            if found is None:
+                parts.append(f"falta la imagen '{t}'")
+            else:
+                parts.append(f"{t} {found[0]:.2f} de {templates.THRESHOLD:.2f} (mejor sitio {found[1][0]:.2f},{found[1][1]:.2f})")
+        return (f"{'; '.join(parts)}. Ventana {self.win.client_w}x{self.win.client_h}, "
+                f"brillo medio {int(frame.mean())}")
+
     def click_button(self, name: str) -> None:
         x, y = self.cfg.buttons[name]
         winctl.click(self.win, x, y)
