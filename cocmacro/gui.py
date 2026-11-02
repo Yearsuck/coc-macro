@@ -6,7 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
-from cocmacro import (__version__, bot, calibrate, config, frames, game, hotkeys, ocr, overlay, paths,
+from cocmacro import (__version__, bot, calibrate, config, defaults, frames, game, hotkeys, ocr, overlay, paths,
                       preflight, recorder, theme, updater, viewmodel as vm, winctl)
 from cocmacro.config import format_mmss, parse_mmss
 from cocmacro.theme import BG, BORDER, CARD, DIM, GOLD, MUTED, PINK, TEXT
@@ -29,6 +29,9 @@ class App:
         root.resizable(False, True)
         theme.apply_ttk_style(root)
         self.cfg = config.load(CFG_PATH)
+        if defaults.apply(self.cfg, TPL_DIR):
+            DATA.mkdir(parents=True, exist_ok=True)
+            config.save(self.cfg, CFG_PATH)
         self.q: queue.Queue = queue.Queue()
         self.stop_ev = threading.Event()
         self.bot: bot.Bot | None = None
