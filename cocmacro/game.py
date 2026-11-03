@@ -5,33 +5,18 @@ from pathlib import Path
 
 import cv2
 
-from cocmacro import frames, geometry, ocr, player, templates, winctl
+from cocmacro import frames, ocr, player, templates, winctl
 from cocmacro.config import Config
 from cocmacro.recorder import Recording
 
 # Template(s) whose presence identifies each screen.
 SCREEN_TEMPLATES = {"home": ["battle"], "scout": ["next"], "confirm": ["ok"], "results": ["back"]}
-ASPECT_TOLERANCE = 0.02
 DEBUG_KEEP = 60     # newest debug images kept
-
-
-class CalibrationMismatch(Exception):
-    pass
-
-
-def check_aspect(cfg: Config, win: winctl.GameWindow) -> None:
-    if cfg.aspect is None:
-        raise CalibrationMismatch("Falta calibrar: no hay proporcion de ventana guardada")
-    now = geometry.aspect((win.client_w, win.client_h))
-    if abs(now - cfg.aspect) / cfg.aspect > ASPECT_TOLERANCE:
-        raise CalibrationMismatch(
-            f"La ventana cambio de proporcion ({cfg.aspect:.2f} -> {now:.2f}); recalibra")
 
 
 class RealGame:
     def __init__(self, win: winctl.GameWindow, cfg: Config, recording: Recording,
                  stop: threading.Event, tpl_dir: Path, debug_dir: Path | None = None):
-        check_aspect(cfg, win)
         self.win, self.cfg, self.recording, self.stop, self.tpl_dir = win, cfg, recording, stop, Path(tpl_dir)
         self.debug_dir = Path(debug_dir) if debug_dir else None
 

@@ -63,11 +63,12 @@ def test_window_missing_and_minimized(tmp_path):
     assert "minimizada" in preflight.check(good_cfg(), t, r, dry_run=False, find_window=lambda: WIN, capture=mini)
 
 
-def test_aspect_changed(tmp_path):
+def test_saved_window_proportion_is_not_required(tmp_path):
     t, r = setup(tmp_path)
-    cfg = good_cfg()
-    cfg.aspect = 1.0
-    assert "proporcion" in check(cfg, t, r, dry_run=False).lower()
+    for aspect in (None, 1.0):
+        cfg = good_cfg()
+        cfg.aspect = aspect
+        assert check(cfg, t, r, dry_run=False) is None
 
 
 def test_empty_region_is_reported(tmp_path):
