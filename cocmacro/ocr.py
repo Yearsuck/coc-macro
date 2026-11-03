@@ -37,7 +37,7 @@ def _split_touching(patch: np.ndarray, ref_w: float) -> list[np.ndarray]:
     """A blob about two (or three) digits wide is touching digits: cut it at the thinnest columns."""
     h, w = patch.shape
     parts = int(round(w / ref_w))
-    if parts < 2 or w < 1.55 * ref_w:
+    if parts < 2 or w < 1.55 * ref_w or w < 1.1 * h:      # a lone digit is never wider than it is tall (many thin 1s shrink ref_w)
         return [patch]
     cols = patch.sum(axis=0)
     cuts, prev = [], 0
