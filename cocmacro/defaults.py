@@ -10,7 +10,6 @@ from pathlib import Path
 from cocmacro.config import Config
 
 DIR = Path(__file__).with_name("defaults") / "templates"
-ASPECT = 1.7776
 BUTTONS = {
     "battle": (0.0747, 0.8822), "find": (0.1388, 0.6972), "attack": (0.8381, 0.8598),
     "next": (0.9096, 0.7551), "end": (0.0756, 0.7915), "ok": (0.5878, 0.6168),
@@ -19,16 +18,13 @@ BUTTONS = {
 
 
 def apply(cfg: Config, tpl_dir: Path) -> bool:
-    """Fill in the missing buttons, button images and window proportion. True if anything changed."""
+    """Fill in the missing buttons and button images. True if anything changed."""
     tpl_dir = Path(tpl_dir)
     changed = False
     for name, pos in BUTTONS.items():
         if name not in cfg.buttons:
             cfg.buttons[name] = pos
             changed = True
-    if cfg.aspect is None:
-        cfg.aspect = ASPECT
-        changed = True
     for src in sorted(DIR.glob("*.png")):
         dst = tpl_dir / src.name
         if not dst.exists():
