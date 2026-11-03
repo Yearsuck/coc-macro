@@ -1,7 +1,7 @@
 """Checks run before starting the bot; returns a user-facing message or None."""
 from pathlib import Path
 
-from cocmacro import calibrate, game, recorder, winctl
+from cocmacro import calibrate, recorder, winctl
 from cocmacro.config import Config, region_ok
 
 NEEDED_TEMPLATES = ["battle", "next", "ok", "back"]
@@ -26,12 +26,8 @@ def check(cfg: Config, tpl_dir: Path, rec_dir: Path, dry_run: bool,
     except (winctl.WindowNotFound, winctl.WindowMinimized) as e:
         return str(e)
     missing = calibration_missing(cfg, tpl_dir)
-    if cfg.aspect is None or missing:
-        return "Falta calibrar: " + (", ".join(missing) if missing else "proporcion de ventana")
-    try:
-        game.check_aspect(cfg, win)
-    except game.CalibrationMismatch as e:
-        return str(e)
+    if missing:
+        return "Falta calibrar: " + ", ".join(missing)
     if not dry_run:
         try:
             rec = recorder.load_recording(cfg.deployment, rec_dir)
