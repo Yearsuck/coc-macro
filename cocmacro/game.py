@@ -44,6 +44,14 @@ class RealGame:
         return (f"{'; '.join(parts)}. Ventana {self.win.client_w}x{self.win.client_h}, "
                 f"brillo medio {int(frame.mean())}")
 
+    def dismiss_popup(self) -> bool:
+        """A 'Vale' button on screen (star bonus after a win) is pressed where it is. True if pressed."""
+        found = templates.score(frames.grab(self.win), "ok", self.tpl_dir)
+        if found is None or found[0] < templates.THRESHOLD:
+            return False
+        winctl.click(self.win, found[1][0], found[1][1])
+        return True
+
     def click_button(self, name: str) -> None:
         x, y = self.cfg.buttons[name]
         winctl.click(self.win, x, y)
