@@ -76,11 +76,21 @@ class Bot:
         except Exception:
             return ""
 
-    def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None) -> None:
+    def _dismiss_popup(self) -> None:
+        """Close an unexpected 'Vale' notice (star bonus after a win) so it cannot block the next screen."""
+        fn = getattr(self.game, "dismiss_popup", None)
+        if fn and fn():
+            self.log("Cierro un aviso (bonus estelar)")
+            self.sleep(self.step_delay)
+
+    def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None,
+              popups: bool = False) -> None:
         for i in range(max(1, int(self.timeout_s / POLL))):
             self._check()
             if pred():
                 return
+            if popups:
+                self._dismiss_popup()
             if i and i % REPORT_EVERY == 0:
                 self.log(f"Sigo esperando: {what} ({i * POLL:.0f}s){self._why(screen)}")
             self.sleep(POLL)
@@ -124,7 +134,7 @@ class Bot:
             verdict = "atacaria" if decisions.should_attack(gold, elixir, self.cfg) else "pasaria (Siguiente)"
             self.log(f"[simulacion] oro {gold} elixir {elixir}: {verdict}")
             return
-        self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home")
+        self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True)
         self._phase("search")
         for name in ("battle", "find", "attack"):
             self._click(name)
@@ -191,7 +201,7 @@ class Bot:
             self.sleep(POLL)
         else:
             raise _Abort("Tiempo agotado esperando el final de la batalla")
-        self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home")
+        self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home", popups=True)
 
     def run_once(self) -> bool:
         try:
