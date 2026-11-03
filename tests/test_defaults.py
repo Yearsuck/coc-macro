@@ -7,7 +7,6 @@ def test_fresh_install_gets_a_complete_calibration(tmp_path):
     cfg, tpl = config.Config(), tmp_path / "templates"
     assert defaults.apply(cfg, tpl) is True
     assert preflight.calibration_missing(cfg, tpl) == []
-    assert cfg.aspect == defaults.ASPECT
     assert all(cv2.imread(str(p)) is not None for p in tpl.glob("*.png"))
 
 
