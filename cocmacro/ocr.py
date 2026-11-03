@@ -120,15 +120,23 @@ def read_crop(crop: np.ndarray) -> int | None:
     """Digits in an already cropped region of the loot / damage numbers."""
     if not _usable(crop):
         return None
-    reads = set()
+    reads: list[int] = []
     for thresh in (THRESH, *FALLBACK_THRESH):
         glyphs = segment(crop, thresh)
         chars = [classify(g) for g in glyphs]
         if glyphs and None not in chars:
             value = parse_digits("".join(chars).removesuffix("%"))      # the damage zone often includes the % sign
             if value is not None:
-                reads.add(value)
-    return reads.pop() if len(reads) == 1 else None      # a disagreement between cuts is not a reading
+                reads.append(value)
+    if len(set(reads)) <= 1:
+        return reads[0] if reads else None
+    # Cuts that disagree are not a reading, except a stray speck: yellow gold text is invisible at the
+    # strictest cut, which then "reads" one glyph. Fewer digits than a value two other cuts agree on = noise.
+    longest = max(reads, key=lambda v: len(str(v)))
+    shorter = [v for v in reads if len(str(v)) < len(str(longest))]
+    if reads.count(longest) >= 2 and len(shorter) + reads.count(longest) == len(reads):
+        return longest
+    return None
 
 
 def read_number(img: np.ndarray, region: tuple[float, float, float, float]) -> int | None:
