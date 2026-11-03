@@ -9,10 +9,11 @@ GOOD = (600_000, 700_000)
 
 
 class FakeGame:
-    def __init__(self, reads, damages=(), results_early=False, never_scout=False, boom=False, times=()):
+    def __init__(self, reads, damages=(), results_early=False, never_scout=False, boom=False, times=(), popup=False):
         self.reads, self.damages, self.times = list(reads), list(damages), list(times)
         self.results_early, self.never_scout, self.boom = results_early, never_scout, boom
         self.screen, self.clicks, self.deployed, self.dumped = "home", [], 0, []
+        self.popup, self.dismissed = popup, 0
 
     def screen_is(self, name):
         if self.boom:
@@ -28,7 +29,14 @@ class FakeGame:
         elif name == "ok":
             self.screen = "results"
         elif name == "back":
-            self.screen = "home"
+            self.screen = "bonus" if self.popup else "home"
+
+    def dismiss_popup(self):
+        if self.screen != "bonus":
+            return False
+        self.dismissed += 1
+        self.screen = "home"
+        return True
 
     def read_resources(self):
         return self.reads.pop(0)
@@ -221,3 +229,11 @@ def test_waiting_message_says_why_the_screen_is_not_recognised():
     bot, logs, _ = make(g, timeout_s=11)
     bot.run_once()
     assert any("Sigo esperando: aldea enemiga" in m and "scout 0.31 de 0.85" in m for m in logs)
+
+
+def test_star_bonus_popup_after_victory_is_dismissed():
+    g = FakeGame([GOOD, GOOD], damages=[30, 60], popup=True)
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.dismissed == 1
+    assert any("aviso" in m for m in logs)
