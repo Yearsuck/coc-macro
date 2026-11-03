@@ -45,12 +45,12 @@ def test_click_button_uses_calibrated_position(tmp_path, monkeypatch):
     assert clicks == [(0.909, 0.7517)]
 
 
-def test_aspect_mismatch_refuses(tmp_path, monkeypatch):
-    with pytest.raises(game.CalibrationMismatch):
-        frame = cv2.imread(str(FIX / "f004.png"))
-        monkeypatch.setattr(winctl, "capture", lambda win: frame)
-        cfg = config.Config(aspect=1.0)
-        game.RealGame(WIN, cfg, Recording("d", 1.0, []), threading.Event(), tmp_path)
+def test_any_window_shape_is_accepted_without_recalibrating(tmp_path, monkeypatch):
+    """Resizing the window is always proportional for the user: no saved proportion is checked."""
+    frame = cv2.imread(str(FIX / "f004.png"))
+    monkeypatch.setattr(winctl, "capture", lambda win: frame)
+    for cfg in (config.Config(aspect=1.0), config.Config(aspect=None)):
+        game.RealGame(WIN, cfg, Recording("d", None, []), threading.Event(), tmp_path)
 
 
 def test_works_when_the_window_is_smaller_than_at_calibration(tmp_path, monkeypatch):
