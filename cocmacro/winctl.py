@@ -2,7 +2,8 @@
 
 Capture: PrintWindow(flag 2), works with the window behind others.
 Input: PostMessage mouse events with client coordinates, works without focus.
-A minimized window cannot be captured (raises WindowMinimized); verify by hand.
+A minimized window has a 0x0 client area and cannot be captured, so it is restored without
+activating it and sent to the bottom of the z-order (restore_if_minimized).
 """
 import ctypes
 import time
@@ -19,6 +20,9 @@ user32.SetProcessDPIAware()
 
 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL = 0x0200, 0x0201, 0x0202, 0x020A
 MK_LBUTTON = 1
+SW_SHOWNOACTIVATE = 4
+HWND_BOTTOM = 1
+SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 TITLE_PREFIX = "Clash of Clans"
 PROCESS_NAME = "crosvm"
 
@@ -87,12 +91,25 @@ def is_foreground(win: GameWindow) -> bool:
     return user32.GetForegroundWindow() == win.hwnd
 
 
+def restore_if_minimized(win: GameWindow, api=None, sleep=time.sleep) -> bool:
+    """Bring a minimized window back without stealing focus. True if it had to be restored."""
+    api = api or user32
+    if not api.IsIconic(win.hwnd):
+        return False
+    api.ShowWindow(win.hwnd, SW_SHOWNOACTIVATE)
+    api.SetWindowPos(win.hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+    for _ in range(10):
+        sleep(0.2)
+        if not api.IsIconic(win.hwnd):
+            return True
+    raise WindowMinimized("La ventana esta minimizada y no se pudo restaurar")
+
+
 def capture(win: GameWindow) -> np.ndarray:
     """BGR image of the client area (no title bar), shape (client_h, client_w, 3)."""
     if not user32.IsWindow(win.hwnd):
         raise WindowNotFound("La ventana del juego se cerro")
-    if user32.IsIconic(win.hwnd):
-        raise WindowMinimized("La ventana esta minimizada; no se puede capturar")
+    restore_if_minimized(win)
     wr = wintypes.RECT()
     user32.GetWindowRect(win.hwnd, ctypes.byref(wr))
     ww, wh = wr.right - wr.left, wr.bottom - wr.top
