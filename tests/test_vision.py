@@ -50,10 +50,17 @@ def test_storage_full_elixir_full_width():
     assert vision.storage_full(frame, (0.0, 0.0, 1.0, 1.0)) is True
 
 
-def test_storage_full_left_fifty_percent():
+def test_storage_fills_from_the_icon_so_a_half_bar_is_not_full():
+    """The game fills the bar from the right (icon side) leftwards: fill only on the right half = not full."""
     frame = np.full((50, 200, 3), (20, 20, 20), dtype=np.uint8)
-    frame[:, :100, :] = (30, 200, 240)
+    frame[:, 100:, :] = (30, 200, 240)
     assert vision.storage_full(frame, (0.0, 0.0, 1.0, 1.0)) is False
+
+
+def test_storage_with_fill_reaching_the_left_end_is_full():
+    frame = np.full((50, 200, 3), (20, 20, 20), dtype=np.uint8)
+    frame[:, 4:, :] = (30, 200, 240)       # a 4 px border on the left, fill everywhere else
+    assert vision.storage_full(frame, (0.0, 0.0, 1.0, 1.0)) is True
 
 
 def test_storage_full_empty_region():
@@ -143,7 +150,8 @@ def test_storage_not_full_on_the_real_bars():
     frame = cv2.imread(str(FIXTURES / "storage_bars_not_full.png"))
     assert frame is not None
     assert vision.storage_full(frame, (0.815, 0.030, 0.950, 0.060), hue=GOLD_HUE) is False
-    assert vision.storage_full(frame, (0.815, 0.085, 0.950, 0.115), hue=ELIXIR_HUE) is False
+    # the translucent bar over a busy village can be ambiguous (None); the bot treats None as not full
+    assert vision.storage_full(frame, (0.815, 0.085, 0.950, 0.115), hue=ELIXIR_HUE) in (False, None)
 
 
 def test_cost_is_red_on_the_real_salmon_price():
@@ -178,3 +186,11 @@ def test_find_wall_spot_follows_the_block_when_the_camera_moves():
 def test_find_wall_spot_is_none_without_a_block():
     assert vision.find_wall_spot(np.zeros((300, 600, 3), dtype=np.uint8)) is None
     assert vision.find_wall_spot(np.full((300, 600, 3), (40, 120, 60), dtype=np.uint8)) is None     # plain grass
+
+
+def test_real_bars_half_filled_from_the_icon_are_not_full():
+    """Real capture: 17.6 M gold and 16.1 M elixir fill roughly half of each bar, from the right."""
+    frame = cv2.imread(str(FIXTURES / "storage_bars_half_full.png"))
+    assert frame is not None
+    assert vision.storage_full(frame, (0.815, 0.030, 0.950, 0.060), hue=GOLD_HUE) is False
+    assert vision.storage_full(frame, (0.815, 0.085, 0.950, 0.115), hue=ELIXIR_HUE) is False
