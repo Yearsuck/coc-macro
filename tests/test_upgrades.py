@@ -51,6 +51,7 @@ class FakeScreen:
         self._has = has_templates or {}
         self._find = find_templates or {}
         self._frame = object()  # sentinel
+        self._menu_open = False
 
     def grab(self):
         return self._frame
@@ -59,8 +60,16 @@ class FakeScreen:
         self.clicks.append((x, y))
         # Record a human-readable name for common positions
         self.click_names.append(self._name_for(x, y))
+        if self.click_names[-1] == "build":
+            self._menu_open = True
+        elif self.click_names[-1] == "build_close":
+            self._menu_open = False
 
     def has(self, template: str) -> bool:
+        if template == "menu_close_x" and template not in self._has:
+            return self._menu_open                  # the Construir menu opens and closes like the real one
+        if template == "battle" and template not in self._has:
+            return True                             # the village (Batalla button) is on screen
         v = self._has.get(template, False)
         if callable(v):
             return v()
@@ -108,7 +117,7 @@ def test_walls_normal_upgrade_both_resources(monkeypatch):
     monkeypatch.setattr(vision, "cost_is_red", cost_tracker)
 
     scr = FakeScreen(
-        has_templates={"wall_panel": True, "gem_cost": False, "confirm_upgrade": True},
+        has_templates={"wall_panel": True, "gem_cost": False, "confirm_upgrade": True, "walls_dialog": True},
         find_templates={"confirm_upgrade": (0.5, 0.9)},
     )
 
@@ -252,7 +261,7 @@ class MenuScreen(FakeScreen):
 def _busy_cfg():
     cfg = _cfg()
     cfg.buttons.update({"tab_builders": (0.76, 0.93), "tab_researchers": (0.83, 0.93), "tab_pets": (0.97, 0.93),
-                        "upgrade_confirm": (0.70, 0.85), "upgrade_window_close": (0.88, 0.07)})
+                        "upgrade_confirm": (0.70, 0.85), "upgrade_window_close": (0.88, 0.07), "dialog_close": (0.67, 0.33)})
     cfg.regions.update({"tab_count_builders": (0.74, 0.95, 0.79, 0.98), "tab_count_researchers": (0.81, 0.95, 0.86, 0.98),
                         "tab_count_pets": (0.95, 0.95, 0.99, 0.98), "upgrade_cost": (0.66, 0.84, 0.72, 0.90)})
     return cfg
@@ -356,18 +365,44 @@ def test_walls_click_the_wall_found_on_screen_before_the_fixed_spot(monkeypatch)
     assert scr.clicks[0] == (0.61, 0.22)
 
 
-def test_walls_fall_back_to_the_fixed_spot_when_no_block_is_found(monkeypatch):
+def test_walls_press_nothing_when_the_block_cannot_be_found(monkeypatch):
+    """Never fall back to a fixed spot on a moving camera: it can land on the gem shop."""
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
     scr = FakeScreen(has_templates={"wall_panel": True})
     scr.wall_spot = lambda: None
+    logs = []
+    assert upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep) is False
+    assert scr.clicks == [] and any("No veo el bloque" in m for m in logs)
+
+
+def test_walls_stop_touching_things_when_another_screen_opens(monkeypatch):
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
+    scr = FakeScreen(has_templates={"wall_panel": False, "battle": False})      # a window covers the village
+    logs = []
+    assert upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep) is False
+    assert scr.click_names == ["wall_spot"] and any("inesperada" in m for m in logs)
+
+
+def test_the_menu_is_only_closed_when_it_is_open(monkeypatch):
+    """Its X is where the gold bar sits in the village: pressing it there opens the gem shop."""
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
+    scr = FakeScreen(has_templates={"wall_panel": True, "menu_close_x": False})     # the build click never opens it
     upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
-    assert scr.clicks[0] == _cfg().buttons["wall_spot"]
+    assert "build_close" not in scr.click_names
+
+
+def test_walls_close_a_menu_left_open_before_zooming(monkeypatch):
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
+    scr = FakeScreen(has_templates={"wall_panel": True})
+    scr._menu_open = True
+    upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert scr.click_names[0] == "build_close"
 
 
 def test_walls_do_not_report_success_when_the_dialog_never_shows(monkeypatch):
     calls = iter([True, False, True, False])      # per resource: red after the add, payable after the remove
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: next(calls, False))
-    scr = FakeScreen(has_templates={"wall_panel": True, "confirm_upgrade": False})
+    scr = FakeScreen(has_templates={"wall_panel": True, "confirm_upgrade": False, "walls_dialog": True})
     logs = []
     assert upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep) is False
     assert any("dialogo" in m for m in logs)
@@ -375,7 +410,7 @@ def test_walls_do_not_report_success_when_the_dialog_never_shows(monkeypatch):
 
 def test_walls_never_press_mejorar_while_the_price_is_red(monkeypatch):
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
-    scr = FakeScreen(has_templates={"wall_panel": True, "confirm_upgrade": True},
+    scr = FakeScreen(has_templates={"wall_panel": True, "confirm_upgrade": True, "walls_dialog": True},
                      find_templates={"confirm_upgrade": (0.59, 0.62)})
     assert upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep) is False
     assert not any(n.startswith("wall_up_") for n in scr.click_names)
@@ -436,7 +471,7 @@ def test_walls_second_remove_rescues_the_upgrade(monkeypatch):
     cfg = _cfg()
     seq = iter([True, True, False, True, True, False])     # per resource: red after the add, red after remove 1, payable after 2
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: next(seq, False))
-    scr = FakeScreen(has_templates={"wall_panel": True, "confirm_upgrade": True},
+    scr = FakeScreen(has_templates={"wall_panel": True, "confirm_upgrade": True, "walls_dialog": True},
                      find_templates={"confirm_upgrade": (0.59, 0.62)})
     assert upgrade_walls(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is True
     n = scr.click_names
@@ -461,3 +496,36 @@ def test_busy_does_not_confirm_when_the_window_price_is_red(monkeypatch):
     assert upgrade_busy(scr, cfg, logs.append, lambda: None, _nop_sleep) is False
     assert "upgrade_confirm" not in scr.click_names and "upgrade_window_close" in scr.click_names
     assert any("No hay recursos" in m for m in logs)
+
+
+def _afford_one(monkeypatch):
+    seq = iter([True, False])           # red after the first add, payable after the remove
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: next(seq, False))
+
+
+def test_walls_close_the_no_builder_notice_and_never_press_anything_else(monkeypatch):
+    """Seen live: with no free builder the game offers to finish another task for 3 gems."""
+    _afford_one(monkeypatch)
+    scr = FakeScreen(has_templates={"wall_panel": True, "no_builder_dialog": True, "walls_dialog": True},
+                     find_templates={"confirm_upgrade": (0.59, 0.62)})
+    logs = []
+    assert upgrade_walls(scr, _busy_cfg(), logs.append, lambda: None, _nop_sleep) is False
+    n = scr.click_names
+    assert n[-1] == "dialog_close" and "(0.590,0.620)" not in n
+    assert sum(m.startswith("No hay constructores") for m in logs) == 1
+
+
+def test_walls_confirm_only_with_the_walls_dialog_title_on_screen(monkeypatch):
+    _afford_one(monkeypatch)
+    scr = FakeScreen(has_templates={"wall_panel": True, "walls_dialog": False},
+                     find_templates={"confirm_upgrade": (0.59, 0.62)})      # some other green button
+    upgrade_walls(scr, _busy_cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert "(0.590,0.620)" not in scr.click_names
+
+
+def test_busy_closes_the_no_builder_notice_after_confirming(monkeypatch):
+    cfg = _free(monkeypatch, builders=1)
+    scr = _busy_screen(no_builder_dialog=True)
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is False
+    n = scr.click_names
+    assert n.index("dialog_close") > n.index("upgrade_confirm")
