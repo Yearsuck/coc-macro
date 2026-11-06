@@ -215,3 +215,13 @@ def test_free_count_ignores_other_text_where_the_counter_would_be():
     frame[565:610, 1160:1296] = strip
     assert vision.free_count(frame, BUILDERS) is None
     assert vision.free_count(frame, RESEARCHERS) is None
+
+
+def test_find_wall_spot_refuses_the_bottom_buttons_too():
+    steel = cv2.cvtColor(np.uint8([[[95, 55, 155]]]), cv2.COLOR_HSV2BGR)[0, 0]
+    frame = np.zeros((729, 1296, 3), dtype=np.uint8)
+    frame[500:700, 40:300] = steel                  # a block whose lowest point is over Batalla (~0.1, 0.95)
+    assert vision.find_wall_spot(frame) is None
+    frame = np.zeros((729, 1296, 3), dtype=np.uint8)
+    frame[500:720, 1150:1280] = steel               # ... or over Construir (~0.94, 0.97)
+    assert vision.find_wall_spot(frame) is None
