@@ -85,6 +85,24 @@ class RealGame:
         return (f"{'; '.join(parts)}. Ventana {self.win.client_w}x{self.win.client_h}, "
                 f"brillo medio {int(frame.mean())}")
 
+    def close_menu(self) -> bool:
+        """Something a stopped routine left open: an upgrade window first (its own X), then the Construir menu.
+        The menu's X is pressed only where it really is (the corner is the gold bar when no menu is open and
+        that opens the gem shop). True if a button was pressed."""
+        frame = frames.grab(self.win)
+        if self._has(frame, "upgrade_window"):
+            x, y = self.cfg.buttons["upgrade_window_close"]
+            winctl.click(self.win, x, y)
+            return True
+        found = templates.score(frame, "menu_close_x", self.tpl_dir)
+        if found is None or found[0] < templates.threshold_for("menu_close_x"):
+            return False
+        bx, by = self.cfg.buttons["build_close"]
+        if abs(found[1][0] - bx) > 0.04 or abs(found[1][1] - by) > 0.05:
+            return False                 # a red X elsewhere (another window): not ours to press blindly
+        winctl.click(self.win, bx, by)
+        return True
+
     def dismiss_popup(self) -> bool:
         """A 'Vale' button on screen (star bonus after a win) is pressed where it is. True if pressed."""
         found = templates.score(frames.grab(self.win), "ok", self.tpl_dir)
