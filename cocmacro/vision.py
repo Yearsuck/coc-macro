@@ -146,6 +146,7 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
 
 WALL_HSV_LOW, WALL_HSV_HIGH = (85, 25, 110), (110, 95, 215)    # steel-blue walls, measured on real captures
 WALL_MIN_AREA = 8000                                            # px at 1296 wide; the block is 25 000+
+HUD_ZONES = ((0.78, 0.0, 1.0, 0.33), (0.0, 0.0, 0.14, 0.24))    # resource bars / gems, profile: never click here
 WALL_RISE_PX = 14                                               # click this far above the block's lowest point
 
 
@@ -167,4 +168,7 @@ def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
     low = ys.max()
     x = float(xs[ys >= low - 4].mean())
     h, w = frame.shape[:2]
-    return x / w, max(0, low - WALL_RISE_PX) / h
+    spot = x / w, max(0, low - WALL_RISE_PX) / h
+    if any(zx0 <= spot[0] <= zx1 and zy0 <= spot[1] <= zy1 for zx0, zy0, zx1, zy1 in HUD_ZONES):
+        return None          # the block is under the game's own buttons: pressing there opens the shop
+    return spot

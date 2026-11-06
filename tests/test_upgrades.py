@@ -51,6 +51,7 @@ class FakeScreen:
         self._has = has_templates or {}
         self._find = find_templates or {}
         self._frame = object()  # sentinel
+        self._menu_open = False
 
     def grab(self):
         return self._frame
@@ -59,8 +60,16 @@ class FakeScreen:
         self.clicks.append((x, y))
         # Record a human-readable name for common positions
         self.click_names.append(self._name_for(x, y))
+        if self.click_names[-1] == "build":
+            self._menu_open = True
+        elif self.click_names[-1] == "build_close":
+            self._menu_open = False
 
     def has(self, template: str) -> bool:
+        if template == "menu_close_x" and template not in self._has:
+            return self._menu_open                  # the Construir menu opens and closes like the real one
+        if template == "battle" and template not in self._has:
+            return True                             # the village (Batalla button) is on screen
         v = self._has.get(template, False)
         if callable(v):
             return v()
@@ -356,12 +365,38 @@ def test_walls_click_the_wall_found_on_screen_before_the_fixed_spot(monkeypatch)
     assert scr.clicks[0] == (0.61, 0.22)
 
 
-def test_walls_fall_back_to_the_fixed_spot_when_no_block_is_found(monkeypatch):
+def test_walls_press_nothing_when_the_block_cannot_be_found(monkeypatch):
+    """Never fall back to a fixed spot on a moving camera: it can land on the gem shop."""
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
     scr = FakeScreen(has_templates={"wall_panel": True})
     scr.wall_spot = lambda: None
+    logs = []
+    assert upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep) is False
+    assert scr.clicks == [] and any("No veo el bloque" in m for m in logs)
+
+
+def test_walls_stop_touching_things_when_another_screen_opens(monkeypatch):
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
+    scr = FakeScreen(has_templates={"wall_panel": False, "battle": False})      # a window covers the village
+    logs = []
+    assert upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep) is False
+    assert scr.click_names == ["wall_spot"] and any("inesperada" in m for m in logs)
+
+
+def test_the_menu_is_only_closed_when_it_is_open(monkeypatch):
+    """Its X is where the gold bar sits in the village: pressing it there opens the gem shop."""
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
+    scr = FakeScreen(has_templates={"wall_panel": True, "menu_close_x": False})     # the build click never opens it
     upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
-    assert scr.clicks[0] == _cfg().buttons["wall_spot"]
+    assert "build_close" not in scr.click_names
+
+
+def test_walls_close_a_menu_left_open_before_zooming(monkeypatch):
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
+    scr = FakeScreen(has_templates={"wall_panel": True})
+    scr._menu_open = True
+    upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert scr.click_names[0] == "build_close"
 
 
 def test_walls_do_not_report_success_when_the_dialog_never_shows(monkeypatch):

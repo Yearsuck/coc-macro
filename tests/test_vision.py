@@ -194,3 +194,15 @@ def test_real_bars_half_filled_from_the_icon_are_not_full():
     assert frame is not None
     assert vision.storage_full(frame, (0.815, 0.030, 0.950, 0.060), hue=GOLD_HUE) is False
     assert vision.storage_full(frame, (0.815, 0.085, 0.950, 0.115), hue=ELIXIR_HUE) is False
+
+
+def test_find_wall_spot_never_points_at_the_game_buttons():
+    """Seen live: with the camera zoomed in, the block's lowest visible point was under the gem bars and the
+    click opened the shop. A spot inside the HUD is refused."""
+    steel = cv2.cvtColor(np.uint8([[[95, 55, 155]]]), cv2.COLOR_HSV2BGR)[0, 0]
+    under_hud = np.zeros((729, 1296, 3), dtype=np.uint8)
+    under_hud[0:200, 1050:1250] = steel              # lowest point near (0.89, 0.27): inside the top-right bars
+    assert vision.find_wall_spot(under_hud) is None
+    clear = np.zeros((729, 1296, 3), dtype=np.uint8)
+    clear[0:300, 500:900] = steel                    # lowest point near (0.54, 0.41): open village
+    assert vision.find_wall_spot(clear) is not None

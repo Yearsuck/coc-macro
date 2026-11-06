@@ -142,3 +142,13 @@ def test_zoom_out_stops_as_soon_as_f8_raises(tmp_path, monkeypatch):
     with pytest.raises(Stop):
         game._Screen(g, check).zoom_out()
     assert wheel == []
+
+
+def test_zoom_out_gives_the_game_a_few_rounds_before_judging_the_view_stable(tmp_path, monkeypatch):
+    """Seen live: the first rounds returned identical pictures because the zoom had not started yet."""
+    g, _ = make(tmp_path, monkeypatch, "f004.png")        # always the same picture
+    wheel = []
+    monkeypatch.setattr(winctl, "post_wheel", lambda *a: wheel.append(a))
+    monkeypatch.setattr(game.time, "sleep", lambda s: None)
+    game._Screen(g).zoom_out()
+    assert len(wheel) >= 3 * 4

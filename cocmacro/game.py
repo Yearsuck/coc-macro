@@ -32,14 +32,15 @@ class _Screen:
     def zoom_out(self) -> None:
         """Wheel the camera out until the picture stops changing (it may be zooming or still moving)."""
         previous = None
-        for _ in range(10):
+        for i in range(12):
             for _ in range(3):
                 self.check()
                 winctl.post_wheel(self.game.win, 0.5, 0.45, -120)
                 time.sleep(0.12)
             time.sleep(0.5)
             frame = self.grab()
-            if previous is not None and float(abs(frame.astype(int) - previous.astype(int)).mean()) < 1.5:
+            # the game may not have started zooming yet: never decide before a few rounds
+            if i >= 3 and float(abs(frame.astype(int) - previous.astype(int)).mean()) < 1.5:
                 return
             previous = frame
 
