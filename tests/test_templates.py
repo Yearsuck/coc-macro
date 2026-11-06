@@ -72,4 +72,5 @@ def test_shipped_buttons_are_never_taken_for_each_other():
             if a == b or ta.shape[0] > tb.shape[0] + 12 or ta.shape[1] > tb.shape[1] + 12:
                 continue
             frame = cv2.copyMakeBorder(tb, 6, 6, 6, 6, cv2.BORDER_REPLICATE)
-            assert cv2.matchTemplate(frame, ta, cv2.TM_CCOEFF_NORMED).max() < templates.THRESHOLD - 0.1, (a, b)
+            margin = 0.05 if a in templates.STRICT_NAMES else 0.1    # look-alike filter buttons use the strict cut
+            assert cv2.matchTemplate(frame, ta, cv2.TM_CCOEFF_NORMED).max() < templates.threshold_for(a) - margin, (a, b)

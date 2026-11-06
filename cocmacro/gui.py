@@ -226,6 +226,16 @@ class App:
         e.pack(side="left", padx=(8, 0), ipady=3)
         self.rule_entries.append(e)
         theme.label(inner, "0:00 desactiva la regla del reloj.", 8, fg=MUTED).pack(anchor="w", pady=(2, 0))
+        theme.label(inner, "Entre ataques", 10, True).pack(anchor="w", pady=(14, 4))
+        self.mode_combo = ttk.Combobox(inner, state="readonly", width=22, style="Dark.TCombobox",
+                                       font=theme.font(10), values=[v for _, v in vm.MODES])
+        self.mode_combo.set(vm.mode_label(self.cfg.mode))
+        self.mode_combo.pack(fill="x", ipady=3)
+        self.full_var = tk.BooleanVar(value=self.cfg.stop_when_full)
+        self.full_chk = tk.Checkbutton(inner, text="Parar si los depositos estan llenos", variable=self.full_var,
+                                       bg=CARD, fg=TEXT, activebackground=CARD, activeforeground=TEXT,
+                                       selectcolor=BG, font=theme.font(9), highlightthickness=0, bd=0)
+        self.full_chk.pack(anchor="w", pady=(6, 0))
         theme.label(inner, "Despliegue", 10, True).pack(anchor="w", pady=(14, 4))
         self.combo = ttk.Combobox(inner, state="readonly", width=22, style="Dark.TCombobox",
                                   font=theme.font(10))
@@ -345,6 +355,8 @@ class App:
         for e in self.rule_entries:
             e.configure(state="disabled" if locked else "normal")
         self.combo.configure(state="disabled" if locked else "readonly")
+        self.mode_combo.configure(state="disabled" if locked else "readonly")
+        self.full_chk.configure(state="disabled" if locked else "normal")
         self.rules_caption.configure(text="REGLAS (BLOQUEADAS MIENTRAS ATACA)" if locked else "REGLAS")
 
     def _fit(self):
@@ -445,6 +457,8 @@ class App:
             messagebox.showerror("CoC Macro", str(e))
             return False
         self.cfg.deployment = self.combo.get() or self.cfg.deployment
+        self.cfg.mode = vm.mode_from_label(self.mode_combo.get())
+        self.cfg.stop_when_full = self.full_var.get()
         self.cfg.auto_check_updates = self.auto_upd.get()
         DATA.mkdir(exist_ok=True)
         config.save(self.cfg, CFG_PATH)
