@@ -265,3 +265,65 @@ def test_a_game_without_close_menu_runs_as_before():
     g = ModeGame()
     bot, _, _ = make(g)
     assert bot.run_once() is True and g.clicks[0] == "battle"
+
+
+class SwallowGame(ModeGame):
+    """A star-bonus notice swallows the first search clicks: Atacar leaves the village on screen."""
+
+    def __init__(self, swallow=1, **kw):
+        super().__init__(**kw)
+        self.swallow, self.attacks = swallow, 0
+
+    def click_button(self, name):
+        if name == "attack":
+            self.attacks += 1
+            if self.attacks <= self.swallow:
+                self.clicks.append(name)
+                return                        # nothing happens: still in the village
+        super().click_button(name)
+
+
+def test_search_is_repeated_when_a_notice_swallowed_the_clicks():
+    g = SwallowGame(swallow=1)
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks[:6] == ["battle", "find", "attack"] * 2 and g.deployed == 1
+    assert any("repito" in m for m in logs)
+
+
+def test_search_aborts_with_a_clear_message_after_three_tries_without_waiting_again():
+    """Review finding: after 3 failed presses the old code fell into another 60 s wait for the scout screen."""
+    g = SwallowGame(swallow=99)
+    slept, logs, stop = [], [], threading.Event()
+    bot = Bot(g, config.Config(), logs.append, stop, sleep=slept.append)
+    assert bot.run_once() is False
+    assert g.clicks.count("battle") == 3
+    assert any("no arranco tras 3 intentos" in m for m in logs) and not any("Sigo esperando" in m for m in logs)
+    assert sum(slept) < 60                       # 3 x (3 presses + 12 s), not 105 s
+
+
+def test_a_dismissed_notice_means_retry_now_not_after_12_seconds():
+    """Review finding: the poll loop kept waiting for the scout screen after the notice had been closed."""
+    class Notice(SwallowGame):
+        def click_button(self, name):
+            if name == "attack" and self.attacks == 0:
+                self.attacks += 1
+                self.clicks.append(name)
+                self.screen = "bonus"              # the notice covers the village and swallows the presses
+                return
+            super().click_button(name)
+    g = Notice(swallow=0)
+    slept, logs, stop = [], [], threading.Event()
+    bot = Bot(g, config.Config(), logs.append, stop, sleep=slept.append)
+    assert bot.run_once() is True
+    assert g.dismissed == 1 and g.clicks[:6] == ["battle", "find", "attack"] * 2
+    assert sum(slept) < 12                         # it did not sit out the 12 s poll
+
+
+def test_a_slow_scout_load_is_not_mistaken_for_a_swallowed_click():
+    """Not in the village and not yet scouting (loading): the clicks worked, do not press Batalla again."""
+    g = ModeGame(never_scout=True)                  # screen becomes 'menu' after Atacar, never 'scout'
+    bot, _, _ = make(g)
+    bot.timeout_s = 3
+    assert bot.run_once() is False
+    assert g.clicks == ["battle", "find", "attack"]
