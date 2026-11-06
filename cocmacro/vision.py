@@ -50,9 +50,10 @@ def cost_is_red(frame: np.ndarray, region: Region) -> bool:
 
 
 def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None = None) -> bool | None:
-    """True if the right-most 6% of the bar region is fill (HSV S>90, V>120, and OpenCV hue inside `hue`
-    when given), False if it is track, None if ambiguous or empty. The region must cover the bar only:
-    the coin / drop icon at its right end is saturated and would read as fill."""
+    """True if the bar is full. The game fills it from the icon (right) towards the left, so full means the
+    LEFT end is fill (HSV S>90, V>120, and OpenCV hue inside `hue` when given); False if that end is still
+    track, None if ambiguous or empty. The region must cover the bar only: the coin / drop icon at its right
+    end is saturated and would always read as fill."""
     if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
         return None
     if frame.shape[0] < 10 or frame.shape[1] < 10:
@@ -75,8 +76,8 @@ def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None 
     if band.size == 0:
         return None
 
-    col_start = min(w - 1, int(w * 0.94))
-    right_band = band[:, col_start:]
+    col_start, col_end = min(w - 1, int(w * 0.06)), max(int(w * 0.12), int(w * 0.06) + 2)
+    right_band = band[:, col_start:col_end]
     if right_band.size == 0:
         return None
 
