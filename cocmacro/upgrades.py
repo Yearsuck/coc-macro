@@ -251,10 +251,14 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
             sleep(CLICK_DELAY)
 
 
-def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep) -> bool:
+def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=None) -> bool:
     """Open Construir, and for every tab (builders, researchers, pets) with a free slot keep upgrading its
     cheapest filtered row until the tab's counter reaches 0 or the price cannot be paid. True if at least one
-    upgrade was confirmed. Always leaves the menu closed."""
+    upgrade was confirmed. Always leaves the menu closed.
+
+    `only` restricts it to some tabs (slot names) and `keep` maps a slot to how many free slots to LEAVE: the
+    walls mode keeps exactly one builder free for the walls, so it asks for only=("builders",), keep={"builders": 1}."""
+    keep = keep or {}
     check()
     scr.click(*cfg.buttons["build"])
     sleep(CLICK_DELAY + 0.6)
@@ -265,12 +269,12 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep) -> bool:
             return False
         frame = scr.grab()
         free = {t[0]: vision.free_count(frame, cfg.regions[t[2]]) for t in BUSY_TABS}
-        todo = [t for t in BUSY_TABS if (free[t[0]] or 0) >= 1]
+        todo = [t for t in BUSY_TABS if (only is None or t[0] in only) and (free[t[0]] or 0) > keep.get(t[0], 0)]
         if not todo:
             log("Nada libre en el menu Construir")
         for tab in todo:
             slot, _btn, count_region = tab[0], tab[1], tab[2]
-            left = free[slot] or 0
+            left, reserve = free[slot] or 0, keep.get(slot, 0)
             for _ in range(MAX_PER_TAB):
                 # drain the tab: the cheapest item again and again until its counter is 0 or it cannot be paid
                 if not _first_row_upgrade(scr, cfg, tab, log, check, sleep):
@@ -281,7 +285,7 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep) -> bool:
                 if now is None:                       # blurry for a moment right after the confirm: look again
                     sleep(0.6)
                     now = vision.free_count(scr.grab(), cfg.regions[count_region])
-                if not now or now >= left:        # 0 or unreadable: done; not lower: it did not start, do not loop
+                if not now or now >= left or now <= reserve:   # done / unreadable / did not start / reserve reached
                     break
                 left = now
             if not scr.has("menu_close_x"):             # the game closed the menu: nothing more to do

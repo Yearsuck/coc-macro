@@ -43,7 +43,7 @@ def test_no_mode_never_calls_hooks():
 
 
 def test_walls_runs_only_when_a_builder_is_free():
-    g = ModeGame(slots=[{"builders": 0}, {"builders": 2}, {"builders": 0}])
+    g = ModeGame(slots=[{"builders": 0}, {"builders": 1}, {"builders": 0}])
     bot, _, _ = make(g, mode="walls")
     bot.spend_free_slots()
     assert g.upgrades == []
@@ -327,7 +327,7 @@ def test_busy_calls_the_routine_once_because_it_drains_every_tab_itself():
 
 
 def test_walls_repeat_while_a_builder_is_still_free():
-    g = ModeGame(slots=[{"builders": 2}, {"builders": 1}, {"builders": 0}])
+    g = ModeGame(slots=[{"builders": 1}, {"builders": 1}, {"builders": 0}])
     bot, _, _ = make(g, mode="walls")
     bot.spend_free_slots()
     assert g.upgrades == ["walls", "walls"]
@@ -335,7 +335,7 @@ def test_walls_repeat_while_a_builder_is_still_free():
 
 def test_walls_stop_trying_when_nothing_could_be_upgraded_and_the_attack_goes_on():
     """Not enough resources: no endless retry, the bot goes and attacks."""
-    g = ModeGame(slots=[{"builders": 2}], upgrade_ok=False)
+    g = ModeGame(slots=[{"builders": 1}], upgrade_ok=False)
     bot, _, stop = make(g, mode="walls")
     _stop_after_first_attack(bot, stop)
     bot.run()
@@ -343,7 +343,7 @@ def test_walls_stop_trying_when_nothing_could_be_upgraded_and_the_attack_goes_on
 
 
 def test_the_drain_is_capped():
-    g = ModeGame(slots=[{"builders": 5}])
+    g = ModeGame(slots=[{"builders": 1}])
     bot, _, _ = make(g, mode="walls")
     bot.spend_free_slots()
     assert len(g.upgrades) == bot_module.MAX_SPEND_ROUNDS
@@ -455,3 +455,133 @@ def test_a_menu_left_open_by_the_upgrades_is_closed_before_reading_the_storages(
     bot.run()
     i = order.index("upgrade")
     assert order[i + 1] == "close" and order[i + 2] == "storages"
+
+
+class KeepGame(ModeGame):
+    """Records the kind of every upgrade call and lets 'surplus' free builders down to the reserve."""
+
+    def __init__(self, builders, surplus_ok=True, **kw):
+        super().__init__(slots=[{"builders": builders}], **kw)
+        self.builders, self.surplus_ok, self.kinds = builders, surplus_ok, []
+
+    def free_slots(self):
+        return {"builders": self.builders}
+
+    def upgrade(self, kind, log=None, check=None):
+        self.kinds.append(kind)
+        if kind == "surplus" and self.surplus_ok:
+            self.builders = 1
+            return True
+        if kind == "walls":
+            return len([k for k in self.kinds if k == "walls"]) == 1     # a second pass finds nothing to pay
+        return False
+
+
+def test_walls_mode_puts_the_surplus_builders_in_cheap_upgrades_first_and_keeps_one_for_walls():
+    g = KeepGame(builders=4)
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert g.kinds[0] == "surplus" and "walls" in g.kinds and g.builders == 1
+
+
+def test_walls_mode_with_exactly_one_builder_goes_straight_to_the_walls():
+    g = KeepGame(builders=1)
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert "surplus" not in g.kinds and g.kinds[0] == "walls"
+
+
+def test_walls_mode_with_no_free_builder_does_nothing():
+    g = KeepGame(builders=0)
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert g.kinds == []
+
+
+def test_walls_still_run_when_the_surplus_could_not_be_paid():
+    g = KeepGame(builders=3, surplus_ok=False)
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert g.kinds[0] == "surplus" and "walls" in g.kinds
+
+
+def test_busy_mode_never_asks_for_the_surplus_routine():
+    g = KeepGame(builders=4)
+    bot, _, _ = make(g, mode="busy")
+    bot.spend_free_slots()
+    assert g.kinds == ["busy"]
+
+
+class SettlingGame(KeepGame):
+    """Right after the Construir menu closes the village counter reads blurry (None) for a moment."""
+
+    def __init__(self, builders, **kw):
+        super().__init__(builders, **kw)
+        self.blurry_after_surplus = False
+
+    def free_slots(self):
+        if self.blurry_after_surplus:
+            self.blurry_after_surplus = False
+            return {"builders": None}
+        return {"builders": self.builders}
+
+    def upgrade(self, kind, log=None, check=None):
+        ok = super().upgrade(kind, log, check)
+        if kind == "surplus":
+            self.blurry_after_surplus = True
+        return ok
+
+
+def test_the_reserved_builder_is_trusted_when_the_counter_blinks_after_the_surplus():
+    """Review finding: a blurry read right after the menu closed made the bot think no builder was left and it
+    skipped the walls the reserve was kept for."""
+    g = SettlingGame(builders=4)
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert g.kinds[0] == "surplus" and "walls" in g.kinds
+
+
+def test_the_walls_wait_for_the_hud_after_the_surplus_before_looking_at_the_counter():
+    slept = []
+    g = KeepGame(builders=3)
+    logs, stop = [], threading.Event()
+    bot = Bot(g, config.Config(mode="walls"), logs.append, stop, sleep=slept.append)
+    bot.spend_free_slots()
+    assert any(x >= bot_module.STORAGE_SETTLE for x in slept)
+
+
+def test_a_partial_surplus_still_lets_the_walls_run():
+    class Partial(KeepGame):
+        def upgrade(self, kind, log=None, check=None):
+            self.kinds.append(kind)
+            if kind == "surplus":
+                self.builders = 3              # one upgrade started, the next price was red
+                return True
+            return kind == "walls" and self.kinds.count("walls") == 1
+    g = Partial(builders=4)
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert g.kinds[:2] == ["surplus", "walls"]
+
+
+def test_losing_the_window_while_reading_the_builders_stops_the_run():
+    from cocmacro.winctl import WindowNotFound
+
+    class Lost(KeepGame):
+        def free_slots(self):
+            raise WindowNotFound("ventana perdida")
+    g = Lost(builders=2)
+    bot, logs, _ = make(g, mode="walls")
+    bot.run()
+    assert any("ventana perdida" in m for m in logs) and g.deployed == 0
+
+
+def test_an_unexpected_error_reading_the_builders_means_none_free_and_the_attack_goes_on():
+    class Broken(KeepGame):
+        def free_slots(self):
+            raise ValueError("bad frame")
+    g = Broken(builders=2)
+    bot, logs, stop = make(g, mode="walls")
+    _stop_after_first_attack(bot, stop)
+    bot.run()
+    assert g.kinds == [] and g.deployed == 1 and any("No pude leer los constructores" in m for m in logs)
