@@ -15,7 +15,9 @@ BLIND_POLLS = 40         # battle polls (20 s) with no damage reading before a d
 SEARCH_TRIES = 3          # presses of Batalla / Buscar / Atacar before giving up
 SEARCH_RETRY_S = 12       # seconds to see the scout screen before pressing them again
 FULL_POLL_S = 5          # seconds between storage checks while waiting for room
-PET_CHECK_EVERY = 5      # busy mode: the pet counter only shows inside the menu, so look every N attacks
+STORAGE_SETTLE = 0.6      # seconds for the HUD to settle after a window closes, before the first reading
+STORAGE_READ_GAP = 0.4   # seconds between the readings of the storage bars
+MAX_SPEND_ROUNDS = 10    # upgrade routines run back to back before an attack
 FAIL_WAIT_S = 30         # pause after an upgrade routine that did nothing, before trying again
 UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before giving up
 
@@ -254,16 +256,35 @@ class Bot:
             self.sleep(POLL)
 
     def _storages_full(self) -> bool:
+        """Full if two readings say so, out of up to 4. Right after a window closes the HUD is shifted for a
+        moment and a bar can read 'not full', so the HUD gets a moment to settle first and one reading is not
+        trusted. An unreadable reading (None) counts for neither side; if nothing is ever clear it is not full."""
         fn = getattr(self.game, "storages_full", None)
+        if not fn:
+            return False
+        self.sleep(STORAGE_SETTLE)
+        full = not_full = 0
         try:
-            return bool(fn and fn() is True)
+            for i in range(4):
+                if i:
+                    self.sleep(STORAGE_READ_GAP)
+                answer = fn()
+                if answer is True:
+                    full += 1
+                elif answer is False:
+                    not_full += 1
+                if full == 2 or not_full == 2:
+                    break
         except (_Abort, WindowNotFound, WindowMinimized):
             raise
         except Exception as e:             # an unreadable screen must not take the bot down
             self.log(f"No pude leer los depositos: {e}")
             return False
+        return full >= 2
 
     def _slot_free(self) -> bool:
+        if self.cfg.mode == "busy":
+            return True      # the pet counter is only readable inside the Construir menu: always look there
         fn = getattr(self.game, "free_slots", None)
         if not fn:
             return False
@@ -274,11 +295,7 @@ class Bot:
         except Exception as e:
             self.log(f"No pude leer los constructores: {e}")
             return False
-        keys = ("builders",) if self.cfg.mode == "walls" else ("builders", "researchers")
-        if any((slots.get(k) or 0) >= 1 for k in keys):
-            return True
-        # busy mode also covers pets, which are only readable inside the menu
-        return self.cfg.mode == "busy" and self.attacks_done > 0 and self.attacks_done % PET_CHECK_EVERY == 0
+        return (slots.get("builders") or 0) >= 1
 
     def _spend(self) -> bool:
         """Run the upgrade routine of the active mode. A routine that fails never stops the bot."""
@@ -298,11 +315,16 @@ class Bot:
             self.log("No se pudo mejorar nada")
         return ok
 
-    def after_attack(self) -> None:
+    def spend_free_slots(self) -> None:
+        """Before every attack (the first one too): use every free builder / researcher / pet, so the counters
+        are at 0, unless the price cannot be paid. The busy routine drains every tab by itself; walls run again
+        while a builder is still free."""
         if self.dry_run or self.cfg.mode == "none":
             return
-        if self._slot_free():
-            self._spend()
+        rounds = 1 if self.cfg.mode == "busy" else MAX_SPEND_ROUNDS
+        for _ in range(rounds):
+            if not self._slot_free() or not self._spend():
+                return
 
     def wait_if_full(self) -> None:
         """No attacks while gold and elixir are full; in a mode, spend a free slot meanwhile."""
@@ -311,13 +333,13 @@ class Bot:
         announced = False
         while self._storages_full():
             self._check()
+            if not announced:
+                self.log("Depositos llenos: espero")
+                announced = True
             if self.cfg.mode == "busy" or (self.cfg.mode != "none" and self._slot_free()):
                 if not self._spend():
                     self._nap(FAIL_WAIT_S)
                 continue
-            if not announced:
-                self.log("Depositos llenos: espero")
-                announced = True
             self._nap(FULL_POLL_S)
 
     def run_once(self) -> bool:
@@ -339,14 +361,12 @@ class Bot:
             try:
                 if not self.dry_run:
                     self._close_leftover_menu()      # so the storage bars are readable
-                self.wait_if_full()
+                self.spend_free_slots()              # counters to 0 before attacking (the first attack too)
+                if not self.dry_run:
+                    self._close_leftover_menu()      # a menu left open would hide the storage bars
+                self.wait_if_full()                  # then, if the storages are still full, wait for room
             except (_Abort, WindowNotFound, WindowMinimized) as e:
                 self.log(str(e))
                 break
             if not self.run_once():
-                break
-            try:
-                self.after_attack()
-            except (_Abort, WindowNotFound, WindowMinimized) as e:
-                self.log(str(e))
                 break
