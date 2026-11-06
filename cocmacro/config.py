@@ -21,6 +21,8 @@ class Config:
     surrender_pct: int = 50
     surrender_time_s: int = 140  # surrender when the clock shows less than this (2:20); 0 = off
     auto_check_updates: bool = True
+    mode: str = "none"             # "none" | "walls" | "busy": what to do between attacks
+    stop_when_full: bool = False   # do not attack while the gold and elixir storages are full
     deployment: str = "default"
     aspect: float | None = None
     buttons: dict[str, tuple[float, float]] = field(default_factory=dict)
