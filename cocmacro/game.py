@@ -139,10 +139,15 @@ class RealGame:
         return upgrades.free_slots(_Screen(self), self.cfg)
 
     def upgrade(self, kind: str, log, check) -> bool:
-        routine = {"walls": upgrades.upgrade_walls, "busy": upgrades.upgrade_busy}.get(kind)
-        if routine is None:
-            return False
-        return routine(_Screen(self, check), self.cfg, log, check, time.sleep)
+        scr = _Screen(self, check)
+        if kind == "walls":
+            return upgrades.upgrade_walls(scr, self.cfg, log, check, time.sleep)
+        if kind == "busy":
+            return upgrades.upgrade_busy(scr, self.cfg, log, check, time.sleep)
+        if kind == "surplus":      # walls mode: cheapest permanent upgrades for every builder beyond the one reserved
+            return upgrades.upgrade_busy(scr, self.cfg, log, check, time.sleep,
+                                         only=("builders",), keep={"builders": 1})
+        return False
 
     def play_deployment(self) -> bool:
         return player.play(self.win, self.recording, self.stop)
