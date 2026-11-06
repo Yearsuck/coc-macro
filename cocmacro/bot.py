@@ -12,6 +12,9 @@ REPORT_EVERY = 20   # polls (10 s) between 'still waiting' messages
 READ_GAP = 0.4
 MAX_READ_TRIES = 10
 BLIND_POLLS = 40         # battle polls (20 s) with no damage reading before a debug capture is kept
+FULL_POLL_S = 5          # seconds between storage checks while waiting for room
+PET_CHECK_EVERY = 5      # busy mode: the pet counter only shows inside the menu, so look every N attacks
+FAIL_WAIT_S = 30         # pause after an upgrade routine that did nothing, before trying again
 UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before giving up
 
 
@@ -203,6 +206,80 @@ class Bot:
             raise _Abort("Tiempo agotado esperando el final de la batalla")
         self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home", popups=True)
 
+    # -- modes: storages full / spend free builders ---------------------
+    def _nap(self, seconds: float) -> None:
+        """Sleep in short steps so F8 is honoured."""
+        for _ in range(max(1, int(seconds / POLL))):
+            self._check()
+            self.sleep(POLL)
+
+    def _storages_full(self) -> bool:
+        fn = getattr(self.game, "storages_full", None)
+        try:
+            return bool(fn and fn() is True)
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:             # an unreadable screen must not take the bot down
+            self.log(f"No pude leer los depositos: {e}")
+            return False
+
+    def _slot_free(self) -> bool:
+        fn = getattr(self.game, "free_slots", None)
+        if not fn:
+            return False
+        try:
+            slots = fn()
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"No pude leer los constructores: {e}")
+            return False
+        keys = ("builders",) if self.cfg.mode == "walls" else ("builders", "researchers")
+        if any((slots.get(k) or 0) >= 1 for k in keys):
+            return True
+        # busy mode also covers pets, which are only readable inside the menu
+        return self.cfg.mode == "busy" and self.attacks_done > 0 and self.attacks_done % PET_CHECK_EVERY == 0
+
+    def _spend(self) -> bool:
+        """Run the upgrade routine of the active mode. A routine that fails never stops the bot."""
+        fn = getattr(self.game, "upgrade", None)
+        if not fn:
+            return False
+        self._phase("upgrade")
+        self.log("Mejorando muros" if self.cfg.mode == "walls" else "Mejorando lo mas barato")
+        try:
+            ok = bool(fn(self.cfg.mode, self.log, self._check))
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"La mejora fallo: {e}")
+            return False
+        if not ok:
+            self.log("No se pudo mejorar nada")
+        return ok
+
+    def after_attack(self) -> None:
+        if self.dry_run or self.cfg.mode == "none":
+            return
+        if self._slot_free():
+            self._spend()
+
+    def wait_if_full(self) -> None:
+        """No attacks while gold and elixir are full; in a mode, spend a free slot meanwhile."""
+        if self.dry_run or not (self.cfg.stop_when_full or self.cfg.mode != "none"):
+            return
+        announced = False
+        while self._storages_full():
+            self._check()
+            if self.cfg.mode == "busy" or (self.cfg.mode != "none" and self._slot_free()):
+                if not self._spend():
+                    self._nap(FAIL_WAIT_S)
+                continue
+            if not announced:
+                self.log("Depositos llenos: espero")
+                announced = True
+            self._nap(FULL_POLL_S)
+
     def run_once(self) -> bool:
         try:
             self._cycle()
@@ -219,5 +296,15 @@ class Bot:
 
     def run(self) -> None:
         while not self.stop.is_set():
+            try:
+                self.wait_if_full()
+            except (_Abort, WindowNotFound, WindowMinimized) as e:
+                self.log(str(e))
+                break
             if not self.run_once():
+                break
+            try:
+                self.after_attack()
+            except (_Abort, WindowNotFound, WindowMinimized) as e:
+                self.log(str(e))
                 break
