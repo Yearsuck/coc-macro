@@ -109,6 +109,7 @@ def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None 
 
 
 ZERO_FILE = Path(__file__).with_name("counter_zero.npz")
+MIN_COUNTER_GLYPH_H = 9    # px at 1296 wide: village counters are 14 tall, the ones inside the menu 10
 ZERO_MAX_DIST = 0.30   # measured: another '0' of the counter ~0.1, any other digit >= 0.6
 _zero: tuple[np.ndarray, float] | None = None
 
@@ -136,7 +137,9 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
     ref, ref_aspect = _zero_ref()
     for thresh in (ocr.THRESH, *ocr.FALLBACK_THRESH):
         glyphs = [g for g in ocr.segment(crop, thresh=thresh) if g.size]
-        if len(glyphs) < 2:      # a counter has at least digit, slash, digit
+        if not 3 <= len(glyphs) <= 5:      # a counter is digit, slash, digit (up to two digits each)
+            continue
+        if min(g.shape[0] for g in glyphs) < MIN_COUNTER_GLYPH_H:     # small print of lists and timers is not a counter
             continue
         feat, asp = ocr.features(glyphs[0])
         dist = float(np.abs(feat - ref).mean() + ocr.ASPECT_W * abs(asp - ref_aspect))

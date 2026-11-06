@@ -206,3 +206,12 @@ def test_find_wall_spot_never_points_at_the_game_buttons():
     clear = np.zeros((729, 1296, 3), dtype=np.uint8)
     clear[0:300, 500:900] = steel                    # lowest point near (0.54, 0.41): open village
     assert vision.find_wall_spot(clear) is not None
+
+
+def test_free_count_ignores_other_text_where_the_counter_would_be():
+    """Seen live: a Construir list ('187 000') sat under the counter regions and was read as 'some free'."""
+    strip = cv2.imread(str(FIXTURES / "menu_text_over_counters.png"))
+    frame = np.zeros((729, 1296, 3), dtype=np.uint8)
+    frame[565:610, 1160:1296] = strip
+    assert vision.free_count(frame, BUILDERS) is None
+    assert vision.free_count(frame, RESEARCHERS) is None
