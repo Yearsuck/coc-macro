@@ -207,3 +207,61 @@ def test_the_upgrade_phase_is_announced_to_the_window():
     bot = Bot(g, config.Config(mode="walls"), logs.append, stop, sleep=lambda s: None, on_phase=phases.append)
     bot.after_attack()
     assert phases == ["upgrade"]
+
+
+def test_a_menu_left_open_is_closed_before_searching():
+    """Starts with the menu covering the village: without closing it the home screen is never seen."""
+    class Covered(ModeGame):
+        def __init__(self):
+            super().__init__()
+            self.screen, self.closed = "menu", 0
+
+        def close_menu(self):
+            if self.screen != "menu":
+                return False
+            self.closed += 1
+            self.screen = "home"
+            return True
+    g = Covered()
+    bot, logs, _ = make(g)
+    bot.timeout_s = 3
+    assert bot.run_once() is True
+    assert g.closed == 1 and g.clicks[0] == "battle" and any("quedo abierto" in m for m in logs)
+
+
+def test_close_attempts_are_bounded_when_nothing_closes():
+    class Stuck(ModeGame):
+        calls = 0
+
+        def close_menu(self):
+            self.calls += 1
+            return True
+    g = Stuck()
+    bot, _, _ = make(g)
+    bot._close_leftover_menu()
+    assert g.calls == 3
+
+
+def test_a_menu_left_open_is_also_closed_before_checking_the_storages():
+    order = []
+
+    class Ordered(ModeGame):
+        def close_menu(self):
+            order.append("close")
+            return False
+
+        def storages_full(self):
+            order.append("storages")
+            return False
+    g = Ordered()
+    bot, _, stop = make(g, mode="walls")
+    real = bot.after_attack
+    bot.after_attack = lambda: (real(), stop.set())
+    bot.run()
+    assert order[:2] == ["close", "storages"]
+
+
+def test_a_game_without_close_menu_runs_as_before():
+    g = ModeGame()
+    bot, _, _ = make(g)
+    assert bot.run_once() is True and g.clicks[0] == "battle"

@@ -125,6 +125,19 @@ class Bot:
                 self.log(f"(no se pudo guardar la captura: {e})")
 
     # -- cycle ---------------------------------------------------------
+    def _close_leftover_menu(self) -> None:
+        """A routine stopped with F8 can leave the Construir menu or an upgrade window open, which hides
+        Batalla: close them first (at most 3 presses, looking again between them)."""
+        fn = getattr(self.game, "close_menu", None)
+        if not fn:
+            return
+        for _ in range(3):
+            self._check()
+            if not fn():
+                return
+            self.log("Cierro un menu o ventana que quedo abierto")
+            self._nap(self.step_delay)
+
     def _cycle(self) -> None:
         self._check()
         if self.dry_run:
@@ -137,6 +150,7 @@ class Bot:
             verdict = "atacaria" if decisions.should_attack(gold, elixir, self.cfg) else "pasaria (Siguiente)"
             self.log(f"[simulacion] oro {gold} elixir {elixir}: {verdict}")
             return
+        self._close_leftover_menu()
         self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True)
         self._phase("search")
         for name in ("battle", "find", "attack"):
@@ -297,6 +311,8 @@ class Bot:
     def run(self) -> None:
         while not self.stop.is_set():
             try:
+                if not self.dry_run:
+                    self._close_leftover_menu()      # so the storage bars are readable
                 self.wait_if_full()
             except (_Abort, WindowNotFound, WindowMinimized) as e:
                 self.log(str(e))
