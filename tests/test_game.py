@@ -185,3 +185,16 @@ def test_close_menu_does_nothing_on_a_screen_without_the_x(tmp_path, monkeypatch
 def test_close_menu_closes_a_left_over_upgrade_window_with_its_own_x(tmp_path, monkeypatch):
     g, clicks = _menu_game(tmp_path, monkeypatch, "f004.png", upgrade_window=1, menu_close_x=1)
     assert g.close_menu() is True and clicks == [(0.883, 0.075)]
+
+
+def test_upgrade_surplus_runs_the_busy_routine_for_builders_only_leaving_one(tmp_path, monkeypatch):
+    from cocmacro import upgrades
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    seen = {}
+
+    def fake(scr, cfg, log, check, sleep, only=None, keep=None):
+        seen.update(only=only, keep=keep)
+        return True
+    monkeypatch.setattr(upgrades, "upgrade_busy", fake)
+    assert g.upgrade("surplus", lambda m: None, lambda: None) is True
+    assert seen == {"only": ("builders",), "keep": {"builders": 1}}

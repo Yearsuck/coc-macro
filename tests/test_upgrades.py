@@ -653,3 +653,71 @@ def test_busy_reads_the_counter_again_when_it_blinks_after_an_upgrade(monkeypatc
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
     upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
     assert scr.confirms == 2 and scr.free == 0
+
+
+def _keep_one(monkeypatch, scr, researchers=0, pets=0):
+    cfg = _busy_cfg()
+    monkeypatch.setattr(vision, "free_count", lambda _f, r: scr.free if r == cfg.regions["tab_count_builders"]
+                        else (researchers if r == cfg.regions["tab_count_researchers"]
+                              else (pets if r == cfg.regions["tab_count_pets"] else 0)))
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    return cfg
+
+
+def test_keep_one_builder_upgrades_only_the_surplus(monkeypatch):
+    """Walls mode wants exactly one builder free: with 4 free, three go to the cheapest permanent upgrade."""
+    scr = _drain_screen(4)
+    cfg = _keep_one(monkeypatch, scr)
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep,
+                        only=("builders",), keep={"builders": 1}) is True
+    assert scr.confirms == 3 and scr.free == 1
+
+
+def test_keep_one_builder_does_nothing_with_exactly_one_free(monkeypatch):
+    scr = _drain_screen(1)
+    cfg = _keep_one(monkeypatch, scr)
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep,
+                        only=("builders",), keep={"builders": 1}) is False
+    assert scr.confirms == 0 and "tab_builders" not in scr.click_names
+
+
+def test_keep_one_builder_leaves_researchers_and_pets_alone(monkeypatch):
+    scr = _drain_screen(2)
+    cfg = _keep_one(monkeypatch, scr, researchers=2, pets=1)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep, only=("builders",), keep={"builders": 1})
+    assert "tab_researchers" not in scr.click_names and "tab_pets" not in scr.click_names
+    assert scr.confirms == 1
+
+
+class BigStepScreen(DrainScreen):
+    """A confirm that drops the counter by two (the counter can move more than one between two readings)."""
+
+    def click(self, x, y):
+        FakeScreen.click(self, x, y)
+        if self.click_names[-1] == "upgrade_confirm":
+            self.confirms += 1
+            self.free = max(0, self.free - 2)
+
+
+def test_keep_one_builder_stops_when_the_counter_jumps_below_the_reserve(monkeypatch):
+    scr = BigStepScreen(2, has_templates={"menu_close_x": True, "filter_permanent_on": True,
+                                          "filter_cost_min_on": True, "upgrade_window": True})
+    cfg = _keep_one(monkeypatch, scr)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep, only=("builders",), keep={"builders": 1})
+    assert scr.confirms == 1                      # one confirm took it from 2 to 0: no second one
+
+
+def test_busy_stops_when_the_counter_stays_unreadable_after_a_confirm(monkeypatch):
+    scr = _drain_screen(3)
+    cfg = _busy_cfg()
+    reads = {"n": 0}
+
+    def free(_f, region):
+        if region != cfg.regions["tab_count_builders"]:
+            return 0
+        reads["n"] += 1
+        return scr.free if reads["n"] == 1 else None      # the first look sees 3, every later one is blurry
+    monkeypatch.setattr(vision, "free_count", free)
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
+    assert scr.confirms == 1

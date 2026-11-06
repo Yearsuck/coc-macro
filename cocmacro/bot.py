@@ -285,27 +285,19 @@ class Bot:
     def _slot_free(self) -> bool:
         if self.cfg.mode == "busy":
             return True      # the pet counter is only readable inside the Construir menu: always look there
-        fn = getattr(self.game, "free_slots", None)
-        if not fn:
-            return False
-        try:
-            slots = fn()
-        except (_Abort, WindowNotFound, WindowMinimized):
-            raise
-        except Exception as e:
-            self.log(f"No pude leer los constructores: {e}")
-            return False
-        return (slots.get("builders") or 0) >= 1
+        return self._free_builders() >= 1
 
-    def _spend(self) -> bool:
-        """Run the upgrade routine of the active mode. A routine that fails never stops the bot."""
+    def _spend(self, kind: str | None = None) -> bool:
+        """Run an upgrade routine (by default the one of the active mode). A routine that fails never stops the bot."""
         fn = getattr(self.game, "upgrade", None)
         if not fn:
             return False
+        kind = kind or self.cfg.mode
         self._phase("upgrade")
-        self.log("Mejorando muros" if self.cfg.mode == "walls" else "Mejorando lo mas barato")
+        self.log({"walls": "Mejorando muros", "surplus": "Sobran constructores: lo mas barato permanente"}
+                 .get(kind, "Mejorando lo mas barato"))
         try:
-            ok = bool(fn(self.cfg.mode, self.log, self._check))
+            ok = bool(fn(kind, self.log, self._check))
         except (_Abort, WindowNotFound, WindowMinimized):
             raise
         except Exception as e:
@@ -315,16 +307,38 @@ class Bot:
             self.log("No se pudo mejorar nada")
         return ok
 
+    def _free_builders(self) -> int:
+        fn = getattr(self.game, "free_slots", None)
+        if not fn:
+            return 0
+        try:
+            return int(fn().get("builders") or 0)
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"No pude leer los constructores: {e}")
+            return 0
+
     def spend_free_slots(self) -> None:
-        """Before every attack (the first one too): use every free builder / researcher / pet, so the counters
-        are at 0, unless the price cannot be paid. The busy routine drains every tab by itself; walls run again
-        while a builder is still free."""
+        """Before every attack (the first one too). Busy mode: use every free builder / researcher / pet, so the
+        counters are at 0, unless the price cannot be paid (the routine drains every tab by itself). Walls mode:
+        keep exactly one builder free (the surplus goes to the cheapest permanent upgrades) and run the walls
+        while that builder is free."""
         if self.dry_run or self.cfg.mode == "none":
             return
-        rounds = 1 if self.cfg.mode == "busy" else MAX_SPEND_ROUNDS
-        for _ in range(rounds):
-            if not self._slot_free() or not self._spend():
+        if self.cfg.mode == "busy":
+            self._spend()
+            return
+        builders = self._free_builders()
+        if builders > 1 and self._spend("surplus"):
+            # The routine stops at the reserve, so one builder is free for sure. Right after the menu closes the
+            # HUD is still settling and the counter can read blurry: wait, look again, and trust the reserve.
+            self.sleep(STORAGE_SETTLE)
+            builders = max(self._free_builders(), 1)
+        for _ in range(MAX_SPEND_ROUNDS):
+            if builders < 1 or not self._spend():
                 return
+            builders = self._free_builders()
 
     def wait_if_full(self) -> None:
         """No attacks while gold and elixir are full; in a mode, spend a free slot meanwhile."""
