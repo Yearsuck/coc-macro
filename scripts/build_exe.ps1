@@ -3,6 +3,7 @@
 #   powershell -File scripts\build_exe.ps1
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name CoCMacro `
   --add-data "cocmacro\glyphs.npz;cocmacro" `
+  --add-data "cocmacro\counter_zero.npz;cocmacro" `
   --add-data "cocmacro\defaults\templates;cocmacro\defaults\templates" `
   --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 `
   cocmacro\__main__.py
