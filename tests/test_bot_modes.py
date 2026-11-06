@@ -38,34 +38,34 @@ def test_no_mode_never_calls_hooks():
     g = ModeGame(full=[True], slots=[{"builders": 3}])
     bot, _, _ = make(g)
     bot.wait_if_full()
-    bot.after_attack()
+    bot.spend_free_slots()
     assert g.polls == 0 and g.upgrades == []
 
 
 def test_walls_runs_only_when_a_builder_is_free():
-    g = ModeGame(slots=[{"builders": 0}, {"builders": 2}])
+    g = ModeGame(slots=[{"builders": 0}, {"builders": 2}, {"builders": 0}])
     bot, _, _ = make(g, mode="walls")
-    bot.after_attack()
+    bot.spend_free_slots()
     assert g.upgrades == []
-    bot.after_attack()
+    bot.spend_free_slots()
     assert g.upgrades == ["walls"]
 
 
 def test_unreadable_counter_counts_as_none_free():
+    """Walls need a builder: an unreadable village counter means none. (Busy always looks in the menu.)"""
     g = ModeGame(slots=[{"builders": None, "researchers": None}])
-    for mode in ("walls", "busy"):
-        bot, _, _ = make(g, mode=mode)
-        bot.after_attack()
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
     assert g.upgrades == []
 
 
 def test_busy_runs_for_a_free_researcher_but_walls_does_not():
     g = ModeGame(slots=[{"builders": 0, "researchers": 1}])
     walls, _, _ = make(g, mode="walls")
-    walls.after_attack()
+    walls.spend_free_slots()
     assert g.upgrades == []
     busy, _, _ = make(g, mode="busy")
-    busy.after_attack()
+    busy.spend_free_slots()
     assert g.upgrades == ["busy"]
 
 
@@ -111,7 +111,7 @@ def test_hook_failure_does_not_stop_the_bot():
             raise RuntimeError("ui exploded")
     g = Boom(slots=[{"builders": 1}])
     bot, logs, _ = make(g, mode="walls")
-    bot.after_attack()
+    bot.spend_free_slots()
     assert any("ui exploded" in m for m in logs)
 
 
@@ -120,33 +120,8 @@ def test_dry_run_never_upgrades():
     bot, _, _ = make(g, mode="walls")
     bot.dry_run = True
     bot.wait_if_full()
-    bot.after_attack()
+    bot.spend_free_slots()
     assert g.upgrades == [] and g.polls == 0
-
-
-def test_run_upgrades_after_each_attack():
-    g = ModeGame(slots=[{"builders": 1}])
-    bot, _, stop = make(g, mode="walls")
-    real = bot.after_attack
-
-    def once():
-        real()
-        stop.set()
-    bot.after_attack = once
-    bot.run()
-    assert g.deployed == 1 and g.upgrades == ["walls"]
-
-
-def test_busy_looks_in_the_menu_every_fifth_attack_for_pets():
-    g = ModeGame(slots=[{"builders": 0, "researchers": 0}])
-    bot, _, _ = make(g, mode="busy")
-    for done in (1, 2, 3, 4):
-        bot.attacks_done = done
-        bot.after_attack()
-    assert g.upgrades == []
-    bot.attacks_done = 5
-    bot.after_attack()
-    assert g.upgrades == ["busy"]
 
 
 def test_unreadable_game_state_never_takes_the_bot_down():
@@ -159,7 +134,7 @@ def test_unreadable_game_state_never_takes_the_bot_down():
     g = Flaky()
     bot, logs, _ = make(g, mode="walls", stop_when_full=True)
     bot.wait_if_full()
-    bot.after_attack()
+    bot.spend_free_slots()
     assert g.upgrades == [] and sum("No pude leer" in m for m in logs) == 2
 
 
@@ -177,7 +152,7 @@ def test_unreadable_storages_count_as_not_full_and_do_not_wait():
     g = ModeGame(full=[None])
     bot, logs, _ = make(g, stop_when_full=True)
     bot.wait_if_full()
-    assert g.polls == 1 and not any("llenos" in m.lower() for m in logs)
+    assert g.polls == 4 and not any("llenos" in m.lower() for m in logs)      # nothing clear in 4 readings: not full
 
 
 def test_losing_the_window_during_an_upgrade_stops_the_run_cleanly():
@@ -189,23 +164,15 @@ def test_losing_the_window_during_an_upgrade_stops_the_run_cleanly():
     g = Lost(slots=[{"builders": 1}])
     bot, logs, _ = make(g, mode="walls")
     bot.run()
-    assert any("ventana perdida" in m for m in logs) and g.deployed == 1
-
-
-def test_a_failed_attack_never_triggers_the_upgrade_hook():
-    g = ModeGame(slots=[{"builders": 1}], never_scout=True)
-    bot, _, _ = make(g, mode="walls")
-    bot.timeout_s = 3
-    bot.run()
-    assert g.upgrades == [] and bot.attacks_done == 0
+    assert any("ventana perdida" in m for m in logs) and g.deployed == 0     # the upgrades come before the attack
 
 
 def test_the_upgrade_phase_is_announced_to_the_window():
     phases = []
-    g = ModeGame(slots=[{"builders": 1}])
+    g = ModeGame(slots=[{"builders": 1}, {"builders": 0}])
     logs, stop = [], threading.Event()
     bot = Bot(g, config.Config(mode="walls"), logs.append, stop, sleep=lambda s: None, on_phase=phases.append)
-    bot.after_attack()
+    bot.spend_free_slots()
     assert phases == ["upgrade"]
 
 
@@ -252,13 +219,12 @@ def test_a_menu_left_open_is_also_closed_before_checking_the_storages():
 
         def storages_full(self):
             order.append("storages")
+            stop.set()
             return False
     g = Ordered()
     bot, _, stop = make(g, mode="walls")
-    real = bot.after_attack
-    bot.after_attack = lambda: (real(), stop.set())
     bot.run()
-    assert order[:2] == ["close", "storages"]
+    assert order[0] == "close" and order[order.index("storages") - 1] == "close"     # closed right before reading
 
 
 def test_a_game_without_close_menu_runs_as_before():
@@ -327,3 +293,165 @@ def test_a_slow_scout_load_is_not_mistaken_for_a_swallowed_click():
     bot.timeout_s = 3
     assert bot.run_once() is False
     assert g.clicks == ["battle", "find", "attack"]
+
+
+def _stop_after_first_attack(bot, stop):
+    real = bot.run_once
+    bot.run_once = lambda: (real(), stop.set())[0]
+
+
+def test_busy_spends_before_the_first_attack_not_only_after_one():
+    class Order(ModeGame):
+        def upgrade(self, kind, log=None, check=None):
+            self.at_upgrade = list(self.clicks)
+            return super().upgrade(kind, log, check)
+    g = Order(slots=[{"builders": 1}])
+    bot, _, stop = make(g, mode="busy")
+    _stop_after_first_attack(bot, stop)
+    bot.run()
+    assert g.at_upgrade == [] and g.upgrades == ["busy"] and g.deployed == 1
+
+
+def test_busy_always_looks_in_the_menu_because_only_it_shows_the_pets():
+    g = ModeGame(slots=[{"builders": 0, "researchers": 0}])
+    bot, _, _ = make(g, mode="busy")
+    bot.spend_free_slots()
+    assert g.upgrades == ["busy"]
+
+
+def test_busy_calls_the_routine_once_because_it_drains_every_tab_itself():
+    g = ModeGame(slots=[{"builders": 3}])
+    bot, _, _ = make(g, mode="busy")
+    bot.spend_free_slots()
+    assert g.upgrades == ["busy"]
+
+
+def test_walls_repeat_while_a_builder_is_still_free():
+    g = ModeGame(slots=[{"builders": 2}, {"builders": 1}, {"builders": 0}])
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert g.upgrades == ["walls", "walls"]
+
+
+def test_walls_stop_trying_when_nothing_could_be_upgraded_and_the_attack_goes_on():
+    """Not enough resources: no endless retry, the bot goes and attacks."""
+    g = ModeGame(slots=[{"builders": 2}], upgrade_ok=False)
+    bot, _, stop = make(g, mode="walls")
+    _stop_after_first_attack(bot, stop)
+    bot.run()
+    assert g.upgrades == ["walls"] and g.deployed == 1
+
+
+def test_the_drain_is_capped():
+    g = ModeGame(slots=[{"builders": 5}])
+    bot, _, _ = make(g, mode="walls")
+    bot.spend_free_slots()
+    assert len(g.upgrades) == bot_module.MAX_SPEND_ROUNDS
+
+
+class ScriptedStorage(ModeGame):
+    """Answers the storage reading from a script, one answer per read."""
+
+    def __init__(self, answers, **kw):
+        super().__init__(**kw)
+        self.answers = list(answers)
+
+    def storages_full(self):
+        self.polls += 1
+        return self.answers.pop(0) if self.answers else self.last
+
+    last = None
+
+
+def test_a_passing_false_reading_does_not_hide_full_storages():
+    """Seen live: right after a window closes the HUD is shifted and the bar reads 'not full' for a moment."""
+    g = ScriptedStorage([False, True, True, False])
+    g.last = False
+    bot, _, _ = make(g, stop_when_full=True)
+    assert bot._storages_full() is True and g.polls == 3        # F, T, T -> majority
+
+
+def test_two_clear_readings_are_enough_and_cost_two_reads():
+    g = ScriptedStorage([True, True])
+    bot, _, _ = make(g, stop_when_full=True)
+    assert bot._storages_full() is True and g.polls == 2
+    g2 = ScriptedStorage([False, False])
+    bot2, _, _ = make(g2, stop_when_full=True)
+    assert bot2._storages_full() is False and g2.polls == 2
+
+
+def test_the_free_slots_are_spent_before_deciding_to_wait_for_room():
+    """Seen live: it read 'not full' once, drained the counters and attacked without looking again."""
+    order = []
+
+    class Order(ModeGame):
+        def storages_full(self):
+            order.append("storages")
+            return False
+
+        def upgrade(self, kind, log=None, check=None):
+            order.append("upgrade")
+            return True
+    g = Order(slots=[{"builders": 1}, {"builders": 0}])
+    bot, _, stop = make(g, mode="walls", stop_when_full=True)
+    _stop_after_first_attack(bot, stop)
+    bot.run()
+    assert order.index("upgrade") < order.index("storages")
+
+
+def test_unreadable_storage_readings_do_not_count_as_not_full():
+    """Review finding: None, None used to read as 'not full' and the bot attacked with a full storage."""
+    g = ScriptedStorage([None, True, None, True])
+    g.last = None
+    bot, _, _ = make(g, stop_when_full=True)
+    assert bot._storages_full() is True
+
+
+def test_all_unreadable_readings_end_as_not_full_after_four_tries():
+    g = ScriptedStorage([None] * 8)
+    bot, _, _ = make(g, stop_when_full=True)
+    assert bot._storages_full() is False and g.polls == 4
+
+
+def test_the_hud_gets_a_moment_to_settle_before_the_first_reading():
+    slept = []
+    g = ScriptedStorage([True, True])
+    logs, stop = [], threading.Event()
+    bot = Bot(g, config.Config(stop_when_full=True), logs.append, stop, sleep=slept.append)
+    bot._storages_full()
+    assert slept and slept[0] >= 0.5 and g.polls == 2
+
+
+def test_busy_mode_says_the_storages_are_full_while_it_waits():
+    """Review finding: in busy mode that message was unreachable and the bot opened the menu in silence."""
+    def stop_soon(game):
+        if game.polls >= 4:
+            stop.set()
+    g = ModeGame(full=[True], slots=[{"builders": 0}], upgrade_ok=False, on_poll=stop_soon)
+    logs, stop = [], threading.Event()
+    bot = Bot(g, config.Config(mode="busy", stop_when_full=True), logs.append, stop, sleep=lambda s: None)
+    bot.run()
+    assert sum("llenos" in m.lower() for m in logs) == 1
+
+
+def test_a_menu_left_open_by_the_upgrades_is_closed_before_reading_the_storages():
+    order = []
+
+    class Leaves(ModeGame):
+        def upgrade(self, kind, log=None, check=None):
+            order.append("upgrade")
+            return True
+
+        def close_menu(self):
+            order.append("close")
+            return False
+
+        def storages_full(self):
+            order.append("storages")
+            return False
+    g = Leaves(slots=[{"builders": 1}])
+    bot, _, stop = make(g, mode="busy", stop_when_full=True)
+    _stop_after_first_attack(bot, stop)
+    bot.run()
+    i = order.index("upgrade")
+    assert order[i + 1] == "close" and order[i + 2] == "storages"
