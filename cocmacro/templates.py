@@ -44,6 +44,16 @@ def score(frame: np.ndarray, name: str, dir: Path) -> tuple[float, tuple[float, 
     return float(best), ((x + tpl.shape[1] / 2) / w, (y + tpl.shape[0] / 2) / h)
 
 
-def match(frame: np.ndarray, name: str, dir: Path, threshold: float = THRESHOLD) -> bool:
+# Pairs that differ only in colour or in one word (selected / not selected, Coste min / max) score
+# 0.78-0.79 against each other, so they need a stricter cut than ordinary buttons.
+STRICT = 0.88
+STRICT_NAMES = {"filter_permanent", "filter_permanent_on", "filter_cost_min", "filter_cost_min_on"}
+
+
+def threshold_for(name: str) -> float:
+    return STRICT if name in STRICT_NAMES else THRESHOLD
+
+
+def match(frame: np.ndarray, name: str, dir: Path, threshold: float | None = None) -> bool:
     found = score(frame, name, dir)
-    return found is not None and found[0] >= threshold
+    return found is not None and found[0] >= (threshold if threshold is not None else threshold_for(name))

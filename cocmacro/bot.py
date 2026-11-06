@@ -12,6 +12,11 @@ REPORT_EVERY = 20   # polls (10 s) between 'still waiting' messages
 READ_GAP = 0.4
 MAX_READ_TRIES = 10
 BLIND_POLLS = 40         # battle polls (20 s) with no damage reading before a debug capture is kept
+SEARCH_TRIES = 3          # presses of Batalla / Buscar / Atacar before giving up
+SEARCH_RETRY_S = 12       # seconds to see the scout screen before pressing them again
+FULL_POLL_S = 5          # seconds between storage checks while waiting for room
+PET_CHECK_EVERY = 5      # busy mode: the pet counter only shows inside the menu, so look every N attacks
+FAIL_WAIT_S = 30         # pause after an upgrade routine that did nothing, before trying again
 UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before giving up
 
 
@@ -76,12 +81,15 @@ class Bot:
         except Exception:
             return ""
 
-    def _dismiss_popup(self) -> None:
-        """Close an unexpected 'Vale' notice (star bonus after a win) so it cannot block the next screen."""
+    def _dismiss_popup(self) -> bool:
+        """Close an unexpected 'Vale' notice (star bonus after a win) so it cannot block the next screen.
+        True if one was closed."""
         fn = getattr(self.game, "dismiss_popup", None)
         if fn and fn():
             self.log("Cierro un aviso (bonus estelar)")
             self.sleep(self.step_delay)
+            return True
+        return False
 
     def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None,
               popups: bool = False) -> None:
@@ -122,6 +130,42 @@ class Bot:
                 self.log(f"(no se pudo guardar la captura: {e})")
 
     # -- cycle ---------------------------------------------------------
+    def _close_leftover_menu(self) -> None:
+        """A routine stopped with F8 can leave the Construir menu or an upgrade window open, which hides
+        Batalla: close them first (at most 3 presses, looking again between them)."""
+        fn = getattr(self.game, "close_menu", None)
+        if not fn:
+            return
+        for _ in range(3):
+            self._check()
+            if not fn():
+                return
+            self.log("Cierro un menu o ventana que quedo abierto")
+            self._nap(self.step_delay)
+
+    def _open_search(self) -> None:
+        """Batalla -> Buscar -> Atacar. A notice (star bonus after a win) can appear late and swallow these
+        clicks, leaving the village on screen: if after a few seconds it is still the village, press them again
+        (at most 3 times). Still loading a village (not the village, not scouting yet) is NOT retried."""
+        for attempt in range(SEARCH_TRIES):
+            for name in ("battle", "find", "attack"):
+                self._click(name)
+                self.sleep(self.step_delay)
+            noticed = False
+            for _ in range(int(SEARCH_RETRY_S / POLL)):
+                self._check()
+                if self.game.screen_is("scout"):
+                    return
+                if self._dismiss_popup():
+                    noticed = True            # it swallowed the presses: press them again right away
+                    break
+                self.sleep(POLL)
+            if not noticed and not self.game.screen_is("home"):
+                return                        # loading: let the normal wait for the scout screen handle it
+            if attempt + 1 < SEARCH_TRIES:
+                self.log("La busqueda no arranco (aviso encima?): repito Batalla, Buscar, Atacar")
+        raise _Abort(f"La busqueda no arranco tras {SEARCH_TRIES} intentos: sigo en el pueblo")
+
     def _cycle(self) -> None:
         self._check()
         if self.dry_run:
@@ -134,11 +178,10 @@ class Bot:
             verdict = "atacaria" if decisions.should_attack(gold, elixir, self.cfg) else "pasaria (Siguiente)"
             self.log(f"[simulacion] oro {gold} elixir {elixir}: {verdict}")
             return
+        self._close_leftover_menu()
         self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True)
         self._phase("search")
-        for name in ("battle", "find", "attack"):
-            self._click(name)
-            self.sleep(self.step_delay)
+        self._open_search()
         unreadable = 0
         while True:
             self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga", "scout")
@@ -203,6 +246,80 @@ class Bot:
             raise _Abort("Tiempo agotado esperando el final de la batalla")
         self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home", popups=True)
 
+    # -- modes: storages full / spend free builders ---------------------
+    def _nap(self, seconds: float) -> None:
+        """Sleep in short steps so F8 is honoured."""
+        for _ in range(max(1, int(seconds / POLL))):
+            self._check()
+            self.sleep(POLL)
+
+    def _storages_full(self) -> bool:
+        fn = getattr(self.game, "storages_full", None)
+        try:
+            return bool(fn and fn() is True)
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:             # an unreadable screen must not take the bot down
+            self.log(f"No pude leer los depositos: {e}")
+            return False
+
+    def _slot_free(self) -> bool:
+        fn = getattr(self.game, "free_slots", None)
+        if not fn:
+            return False
+        try:
+            slots = fn()
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"No pude leer los constructores: {e}")
+            return False
+        keys = ("builders",) if self.cfg.mode == "walls" else ("builders", "researchers")
+        if any((slots.get(k) or 0) >= 1 for k in keys):
+            return True
+        # busy mode also covers pets, which are only readable inside the menu
+        return self.cfg.mode == "busy" and self.attacks_done > 0 and self.attacks_done % PET_CHECK_EVERY == 0
+
+    def _spend(self) -> bool:
+        """Run the upgrade routine of the active mode. A routine that fails never stops the bot."""
+        fn = getattr(self.game, "upgrade", None)
+        if not fn:
+            return False
+        self._phase("upgrade")
+        self.log("Mejorando muros" if self.cfg.mode == "walls" else "Mejorando lo mas barato")
+        try:
+            ok = bool(fn(self.cfg.mode, self.log, self._check))
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"La mejora fallo: {e}")
+            return False
+        if not ok:
+            self.log("No se pudo mejorar nada")
+        return ok
+
+    def after_attack(self) -> None:
+        if self.dry_run or self.cfg.mode == "none":
+            return
+        if self._slot_free():
+            self._spend()
+
+    def wait_if_full(self) -> None:
+        """No attacks while gold and elixir are full; in a mode, spend a free slot meanwhile."""
+        if self.dry_run or not (self.cfg.stop_when_full or self.cfg.mode != "none"):
+            return
+        announced = False
+        while self._storages_full():
+            self._check()
+            if self.cfg.mode == "busy" or (self.cfg.mode != "none" and self._slot_free()):
+                if not self._spend():
+                    self._nap(FAIL_WAIT_S)
+                continue
+            if not announced:
+                self.log("Depositos llenos: espero")
+                announced = True
+            self._nap(FULL_POLL_S)
+
     def run_once(self) -> bool:
         try:
             self._cycle()
@@ -219,5 +336,17 @@ class Bot:
 
     def run(self) -> None:
         while not self.stop.is_set():
+            try:
+                if not self.dry_run:
+                    self._close_leftover_menu()      # so the storage bars are readable
+                self.wait_if_full()
+            except (_Abort, WindowNotFound, WindowMinimized) as e:
+                self.log(str(e))
+                break
             if not self.run_once():
+                break
+            try:
+                self.after_attack()
+            except (_Abort, WindowNotFound, WindowMinimized) as e:
+                self.log(str(e))
                 break

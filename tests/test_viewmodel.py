@@ -55,3 +55,10 @@ def test_setup_steps():
     after_cal = vm.setup_steps(missing=[], deployment_ok=False)
     assert [(s["done"], s["active"]) for s in after_cal] == [(True, False), (False, True)]
     assert all(s["done"] for s in vm.setup_steps(missing=[], deployment_ok=True))
+
+
+def test_mode_labels_roundtrip_and_unknown_means_none():
+    from cocmacro import viewmodel as vm
+    for key, label in vm.MODES:
+        assert vm.mode_from_label(vm.mode_label(key)) == key == vm.mode_from_label(label)
+    assert vm.mode_from_label("???") == "none" and vm.mode_label("???") == vm.MODES[0][1]

@@ -74,3 +74,13 @@ def test_suggested_zone_is_the_default_one():
     from cocmacro import calibrate
     assert calibrate.suggested_region("gold") == config.DEFAULT_REGIONS["gold"]
     assert calibrate.suggested_region("battle") is None
+
+
+def test_mode_defaults_and_old_config_loads(tmp_path):
+    p = tmp_path / "old.json"
+    p.write_text('{"gold_min": 600000}', encoding="utf-8")
+    cfg = config.load(p)
+    assert cfg.mode == "none" and cfg.stop_when_full is False
+    config.save(config.Config(mode="walls", stop_when_full=True), p)
+    again = config.load(p)
+    assert again.mode == "walls" and again.stop_when_full is True

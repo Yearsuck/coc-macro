@@ -95,3 +95,15 @@ def test_done_returns_to_idle(app):
     app.root.update()
     app._poll()
     assert app.mode == "idle" and app.phase is None
+
+
+def test_mode_and_stop_when_full_are_saved_and_locked_while_running(app):
+    calibrated(app)
+    app.mode_combo.set("Mejorar muros")
+    app.full_var.set(True)
+    assert app._read_cfg() is True
+    assert app.cfg.mode == "walls" and app.cfg.stop_when_full is True
+    assert config.load(gui.CFG_PATH).mode == "walls"
+    app.mode, app.phase = "running", "watch"
+    app._apply_mode(True)
+    assert str(app.mode_combo.cget("state")) == "disabled" and str(app.full_chk.cget("state")) == "disabled"
