@@ -68,3 +68,14 @@ def setup_steps(missing: list[str], deployment_ok: bool) -> list[dict]:
         {"n": 2, "title": "Grabar tu despliegue", "done": deployment_ok, "active": cal_done and not deployment_ok,
          "help": "Despliega tus tropas una vez y pulsa F9 para terminar. Puedes guardar varios."},
     ]
+
+
+MODES = [("none", "Solo atacar"), ("walls", "Mejorar muros"), ("busy", "Mejorar lo mas barato")]
+
+
+def mode_label(mode: str) -> str:
+    return dict(MODES).get(mode, MODES[0][1])
+
+
+def mode_from_label(label: str) -> str:
+    return next((k for k, v in MODES if v == label), "none")
