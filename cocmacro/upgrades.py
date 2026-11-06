@@ -184,22 +184,21 @@ def _select_filter(scr: Screen, off: str, on: str, check, sleep) -> bool:
     return False
 
 
-# Construir menu tabs the bot may use: (slot, tab button, counter region, filter buttons to have selected,
-# header above the first row). The forge / hero-equipment tab is deliberately absent: never upgraded.
+# Construir menu tabs the bot may use: (slot, tab button, counter region, filter buttons to have selected). The forge / hero-equipment tab is deliberately absent: never upgraded.
 BUSY_TABS = (
     ("builders", "tab_builders", "tab_count_builders",
-     (("filter_permanent", "filter_permanent_on"), ("filter_cost_min", "filter_cost_min_on")), "filtered_header"),
+     (("filter_permanent", "filter_permanent_on"), ("filter_cost_min", "filter_cost_min_on"))),
     ("researchers", "tab_researchers", "tab_count_researchers",
-     (("filter_cost_min", "filter_cost_min_on"),), "filtered_header"),
-    ("pets", "tab_pets", "tab_count_pets", (), "assigned_header"),
+     (("filter_cost_min", "filter_cost_min_on"),)),
+    ("pets", "tab_pets", "tab_count_pets", ()),
 )
-FIRST_ROW_DY = 0.075
+MAX_PER_TAB = 8      # upgrades pressed in one tab before looking again (a builder count is at most a few)
 
 
 def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool:
     """On the open Construir menu: open the tab, apply its filters, press the first row and confirm the
     green button of the 'Mejorar tu ...' window. Never presses the grey hammer button, never a red price."""
-    slot, tab_button, _count, filters, header = tab
+    slot, tab_button, _count, filters = tab
     check()
     scr.click(*cfg.buttons[tab_button])
     sleep(CLICK_DELAY + 0.4)
@@ -218,19 +217,19 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
                 check()
                 scr.click(*cfg.buttons["filter"])
                 sleep(CLICK_DELAY)
-    h = scr.find(header)
-    if h is None:
+    row = vision.first_upgrade_row(scr.grab())
+    if row is None:
         sleep(0.8)
-        h = scr.find(header)
-    if h is None:
+        row = vision.first_upgrade_row(scr.grab())
+    if row is None:
         log(f"No encuentro la lista de mejoras ({slot})")
         return False
-    # Cost of the first row, read BEFORE clicking: the click changes the screen
-    if vision.cost_is_red(scr.grab(), (h[0] - 0.10, h[1] + 0.04, h[0] + 0.14, h[1] + 0.11)):
+    # Price of the first row, read BEFORE clicking: the click changes the screen
+    if vision.cost_is_red(scr.grab(), (0.86, row[1] + 0.005, 0.995, row[1] + 0.055)):
         log(f"Primera mejora demasiado cara ({slot})")
         return False
     check()
-    scr.click(h[0], h[1] + FIRST_ROW_DY)
+    scr.click(*row)
     sleep(CLICK_DELAY + 0.4)
     if not scr.has("upgrade_window"):
         log(f"No aparece la ventana de mejora ({slot})")
@@ -253,22 +252,38 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
 
 
 def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep) -> bool:
-    """Open Construir, and for every tab (builders, researchers, pets) with a free slot upgrade its first
-    filtered row. True if at least one upgrade was confirmed. Always leaves the menu closed."""
+    """Open Construir, and for every tab (builders, researchers, pets) with a free slot keep upgrading its
+    cheapest filtered row until the tab's counter reaches 0 or the price cannot be paid. True if at least one
+    upgrade was confirmed. Always leaves the menu closed."""
     check()
     scr.click(*cfg.buttons["build"])
     sleep(CLICK_DELAY + 0.6)
     started = False
     try:
+        if not scr.has("menu_close_x"):
+            log("El menu Construir no se abrio: no pulso nada")
+            return False
         frame = scr.grab()
         free = {t[0]: vision.free_count(frame, cfg.regions[t[2]]) for t in BUSY_TABS}
         todo = [t for t in BUSY_TABS if (free[t[0]] or 0) >= 1]
         if not todo:
             log("Nada libre en el menu Construir")
         for tab in todo:
-            if _first_row_upgrade(scr, cfg, tab, log, check, sleep):
+            slot, _btn, count_region = tab[0], tab[1], tab[2]
+            left = free[slot] or 0
+            for _ in range(MAX_PER_TAB):
+                # drain the tab: the cheapest item again and again until its counter is 0 or it cannot be paid
+                if not _first_row_upgrade(scr, cfg, tab, log, check, sleep):
+                    break
                 started = True
-                log(f"Mejora lanzada ({tab[0]})")
+                log(f"Mejora lanzada ({slot})")
+                now = vision.free_count(scr.grab(), cfg.regions[count_region])
+                if now is None:                       # blurry for a moment right after the confirm: look again
+                    sleep(0.6)
+                    now = vision.free_count(scr.grab(), cfg.regions[count_region])
+                if not now or now >= left:        # 0 or unreadable: done; not lower: it did not start, do not loop
+                    break
+                left = now
             if not scr.has("menu_close_x"):             # the game closed the menu: nothing more to do
                 break
         return started
