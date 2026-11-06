@@ -29,7 +29,7 @@ def test_own_calibration_is_never_overwritten(tmp_path):
 
 NEW_BUTTONS = ("build", "build_close", "filter", "wall_spot", "wall_more", "wall_remove",
                "wall_add1", "wall_up_gold", "wall_up_elixir", "tab_builders", "tab_researchers",
-               "tab_pets", "upgrade_confirm", "upgrade_window_close")
+               "tab_pets", "upgrade_confirm", "upgrade_window_close", "dialog_close")
 NEW_REGIONS = ("storage_gold", "storage_elixir", "free_builders", "free_researchers",
                "wall_title", "wall_cost_gold", "wall_cost_elixir",
                "tab_count_builders", "tab_count_researchers", "tab_count_pets", "upgrade_cost")

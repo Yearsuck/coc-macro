@@ -41,6 +41,18 @@ def _close_menu(scr: Screen, cfg: Config, check, sleep) -> None:
         sleep(0.4)
 
 
+def _dismiss_no_builder(scr: Screen, cfg: Config, log, check, sleep) -> bool:
+    """The game answers an upgrade with no free builder by offering to finish another task for gems. Close
+    that notice with its X (never the green gem button) and report that it was there."""
+    if not scr.has("no_builder_dialog"):
+        return False
+    log("No hay constructores libres: cierro el aviso sin gastar gemas")
+    check()
+    scr.click(*cfg.buttons["dialog_close"])
+    sleep(CLICK_DELAY)
+    return True
+
+
 def _reset_view(scr: Screen, cfg: Config, check, sleep) -> None:
     """Open and close the Construir menu: drops the wall selection and leaves the village as the bot expects."""
     check()
@@ -127,16 +139,20 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
         scr.click(*cfg.buttons[f"wall_up_{resource}"])
         sleep(CLICK_DELAY)
 
-        # Confirm the 'Mejorar muros' dialog (only that exact dialog has this Vale)
+        # Only the exact "Mejorar muros" dialog is confirmed (its title must be on screen)
         sleep(0.8)
-        pos = scr.find("confirm_upgrade") if scr.has("confirm_upgrade") else None
+        if _dismiss_no_builder(scr, cfg, log, check, sleep):
+            return started
+        pos = scr.find("confirm_upgrade") if scr.has("walls_dialog") else None
         if pos is None:
             log(f"No aparece el dialogo de mejora de muros ({resource})")
             _reset_view(scr, cfg, check, sleep)
             continue
         check()
         scr.click(*pos)
-        sleep(CLICK_DELAY)
+        sleep(CLICK_DELAY + 0.6)
+        if _dismiss_no_builder(scr, cfg, log, check, sleep):
+            return started
         started = True
 
     _reset_view(scr, cfg, check, sleep)
@@ -225,7 +241,9 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
             return False
         check()
         scr.click(*cfg.buttons["upgrade_confirm"])      # the green button; the grey one is the hammer item
-        sleep(CLICK_DELAY + 0.4)
+        sleep(CLICK_DELAY + 0.6)
+        if _dismiss_no_builder(scr, cfg, log, check, sleep):
+            return False
         return True
     finally:
         if scr.has("upgrade_window"):                   # still open: refused or not confirmed
