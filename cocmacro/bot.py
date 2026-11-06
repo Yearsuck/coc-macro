@@ -12,6 +12,8 @@ REPORT_EVERY = 20   # polls (10 s) between 'still waiting' messages
 READ_GAP = 0.4
 MAX_READ_TRIES = 10
 BLIND_POLLS = 40         # battle polls (20 s) with no damage reading before a debug capture is kept
+SEARCH_TRIES = 3          # presses of Batalla / Buscar / Atacar before giving up
+SEARCH_RETRY_S = 12       # seconds to see the scout screen before pressing them again
 FULL_POLL_S = 5          # seconds between storage checks while waiting for room
 PET_CHECK_EVERY = 5      # busy mode: the pet counter only shows inside the menu, so look every N attacks
 FAIL_WAIT_S = 30         # pause after an upgrade routine that did nothing, before trying again
@@ -79,12 +81,15 @@ class Bot:
         except Exception:
             return ""
 
-    def _dismiss_popup(self) -> None:
-        """Close an unexpected 'Vale' notice (star bonus after a win) so it cannot block the next screen."""
+    def _dismiss_popup(self) -> bool:
+        """Close an unexpected 'Vale' notice (star bonus after a win) so it cannot block the next screen.
+        True if one was closed."""
         fn = getattr(self.game, "dismiss_popup", None)
         if fn and fn():
             self.log("Cierro un aviso (bonus estelar)")
             self.sleep(self.step_delay)
+            return True
+        return False
 
     def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None,
               popups: bool = False) -> None:
@@ -138,6 +143,29 @@ class Bot:
             self.log("Cierro un menu o ventana que quedo abierto")
             self._nap(self.step_delay)
 
+    def _open_search(self) -> None:
+        """Batalla -> Buscar -> Atacar. A notice (star bonus after a win) can appear late and swallow these
+        clicks, leaving the village on screen: if after a few seconds it is still the village, press them again
+        (at most 3 times). Still loading a village (not the village, not scouting yet) is NOT retried."""
+        for attempt in range(SEARCH_TRIES):
+            for name in ("battle", "find", "attack"):
+                self._click(name)
+                self.sleep(self.step_delay)
+            noticed = False
+            for _ in range(int(SEARCH_RETRY_S / POLL)):
+                self._check()
+                if self.game.screen_is("scout"):
+                    return
+                if self._dismiss_popup():
+                    noticed = True            # it swallowed the presses: press them again right away
+                    break
+                self.sleep(POLL)
+            if not noticed and not self.game.screen_is("home"):
+                return                        # loading: let the normal wait for the scout screen handle it
+            if attempt + 1 < SEARCH_TRIES:
+                self.log("La busqueda no arranco (aviso encima?): repito Batalla, Buscar, Atacar")
+        raise _Abort(f"La busqueda no arranco tras {SEARCH_TRIES} intentos: sigo en el pueblo")
+
     def _cycle(self) -> None:
         self._check()
         if self.dry_run:
@@ -153,9 +181,7 @@ class Bot:
         self._close_leftover_menu()
         self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True)
         self._phase("search")
-        for name in ("battle", "find", "attack"):
-            self._click(name)
-            self.sleep(self.step_delay)
+        self._open_search()
         unreadable = 0
         while True:
             self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga", "scout")
