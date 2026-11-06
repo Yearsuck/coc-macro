@@ -90,3 +90,98 @@ def test_why_not_reports_template_scores(tmp_path, monkeypatch):
     assert "next" in text and f"{templates.THRESHOLD:.2f}" in text and "1296x729" in text
     g2, _ = make(tmp_path / "vacio", monkeypatch, "f004.png")
     assert "falta" in g2.why_not("scout")                      # no template saved at all
+
+
+def test_storages_full_needs_both_and_never_guesses(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.regions.update({"storage_gold": (0.8, 0.03, 0.95, 0.06), "storage_elixir": (0.8, 0.08, 0.95, 0.11)})
+    for gold, elixir, expected in ((True, True, True), (True, False, False), (False, True, False),
+                                   (True, None, None), (None, False, False), (None, None, None)):
+        answers = iter((gold, elixir))
+        monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: next(answers))
+        assert g.storages_full() is expected
+
+
+def test_free_slots_reads_both_counters(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.regions.update({"free_builders": (0.9, 0.79, 0.94, 0.82), "free_researchers": (0.95, 0.79, 0.99, 0.82)})
+    answers = iter((2, None))
+    monkeypatch.setattr(vision, "free_count", lambda frame, region: next(answers))
+    assert g.free_slots() == {"builders": 2, "researchers": None}
+
+
+def test_upgrade_runs_the_routine_of_the_mode_over_a_real_screen(tmp_path, monkeypatch):
+    from cocmacro import upgrades
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    seen = {}
+
+    def fake(scr, cfg, log, check, sleep):
+        seen["scr"] = scr
+        scr.click(0.1, 0.2)
+        return True
+    monkeypatch.setattr(upgrades, "upgrade_walls", fake)
+    assert g.upgrade("walls", lambda m: None, lambda: None) is True
+    assert clicks == [(0.1, 0.2)] and seen["scr"].grab().shape[1] == 1296
+    assert seen["scr"].find("nope") is None and seen["scr"].has("nope") is False
+    assert g.upgrade("none", lambda m: None, lambda: None) is False
+
+
+def test_zoom_out_stops_as_soon_as_f8_raises(tmp_path, monkeypatch):
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    wheel = []
+    monkeypatch.setattr(winctl, "post_wheel", lambda *a: wheel.append(a))
+    monkeypatch.setattr(game.time, "sleep", lambda s: None)
+
+    class Stop(Exception):
+        pass
+
+    def check():
+        raise Stop()
+    with pytest.raises(Stop):
+        game._Screen(g, check).zoom_out()
+    assert wheel == []
+
+
+def test_zoom_out_gives_the_game_a_few_rounds_before_judging_the_view_stable(tmp_path, monkeypatch):
+    """Seen live: the first rounds returned identical pictures because the zoom had not started yet."""
+    g, _ = make(tmp_path, monkeypatch, "f004.png")        # always the same picture
+    wheel = []
+    monkeypatch.setattr(winctl, "post_wheel", lambda *a: wheel.append(a))
+    monkeypatch.setattr(game.time, "sleep", lambda s: None)
+    game._Screen(g).zoom_out()
+    assert len(wheel) >= 3 * 4
+
+
+def _menu_game(tmp_path, monkeypatch, frame_name, **tpl):
+    """RealGame whose 'menu_close_x' / 'upgrade_window' are crops of the scout screen's Siguiente button."""
+    frame = cv2.imread(str(FIX / "f004.png"))
+    for name in tpl:
+        templates.save_template(name, frame, (0.909, 0.7517), (0.06, 0.07), tmp_path)
+    g, clicks = make(tmp_path, monkeypatch, frame_name)
+    g.cfg.buttons.update({"build_close": (0.984, 0.032), "upgrade_window_close": (0.883, 0.075)})
+    return g, clicks
+
+
+def test_close_menu_presses_the_x_where_it_really_is(tmp_path, monkeypatch):
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f004.png", menu_close_x=1)
+    g.cfg.buttons["build_close"] = (0.909, 0.7517)                  # the X is found right where it is expected
+    assert g.close_menu() is True and clicks == [(0.909, 0.7517)]
+
+
+def test_close_menu_never_presses_the_corner_for_a_red_x_somewhere_else(tmp_path, monkeypatch):
+    """The upgrade window and other dialogs have the same red X; the corner is the gold bar (gem shop)."""
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f004.png", menu_close_x=1)
+    assert g.close_menu() is False and clicks == []                 # found at (0.909, 0.75), expected at the corner
+
+
+def test_close_menu_does_nothing_on_a_screen_without_the_x(tmp_path, monkeypatch):
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f019.png", menu_close_x=1)
+    g.cfg.buttons["build_close"] = (0.909, 0.7517)
+    assert g.close_menu() is False and clicks == []
+
+
+def test_close_menu_closes_a_left_over_upgrade_window_with_its_own_x(tmp_path, monkeypatch):
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f004.png", upgrade_window=1, menu_close_x=1)
+    assert g.close_menu() is True and clicks == [(0.883, 0.075)]
