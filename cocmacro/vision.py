@@ -149,7 +149,13 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
 
 WALL_HSV_LOW, WALL_HSV_HIGH = (85, 25, 110), (110, 95, 215)    # steel-blue walls, measured on real captures
 WALL_MIN_AREA = 8000                                            # px at 1296 wide; the block is 25 000+
-HUD_ZONES = ((0.78, 0.0, 1.0, 0.33), (0.0, 0.0, 0.14, 0.24))    # resource bars / gems, profile: never click here
+HUD_ZONES = (                  # the game's own buttons: never click a wall spot inside them
+    (0.78, 0.0, 1.0, 0.33),    # resource bars, gems, shield timer
+    (0.0, 0.0, 0.14, 0.24),    # profile
+    (0.0, 0.24, 0.12, 0.66),   # chat, league, events on the left
+    (0.0, 0.80, 0.30, 1.0),    # Batalla and the bottom-left buttons
+    (0.84, 0.76, 1.0, 1.0),    # Construir and the shop
+)
 WALL_RISE_PX = 14                                               # click this far above the block's lowest point
 
 
