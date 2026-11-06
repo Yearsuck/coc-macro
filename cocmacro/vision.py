@@ -50,9 +50,10 @@ def cost_is_red(frame: np.ndarray, region: Region) -> bool:
 
 
 def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None = None) -> bool | None:
-    """True if the right-most 6% of the bar region is fill (HSV S>90, V>120, and OpenCV hue inside `hue`
-    when given), False if it is track, None if ambiguous or empty. The region must cover the bar only:
-    the coin / drop icon at its right end is saturated and would read as fill."""
+    """True if the bar is full. The game fills it from the icon (right) towards the left, so full means the
+    LEFT end is fill (HSV S>90, V>120, and OpenCV hue inside `hue` when given); False if that end is still
+    track, None if ambiguous or empty. The region must cover the bar only: the coin / drop icon at its right
+    end is saturated and would always read as fill."""
     if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
         return None
     if frame.shape[0] < 10 or frame.shape[1] < 10:
@@ -75,8 +76,8 @@ def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None 
     if band.size == 0:
         return None
 
-    col_start = min(w - 1, int(w * 0.94))
-    right_band = band[:, col_start:]
+    col_start, col_end = min(w - 1, int(w * 0.06)), max(int(w * 0.12), int(w * 0.06) + 2)
+    right_band = band[:, col_start:col_end]
     if right_band.size == 0:
         return None
 
@@ -108,6 +109,7 @@ def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None 
 
 
 ZERO_FILE = Path(__file__).with_name("counter_zero.npz")
+MIN_COUNTER_GLYPH_H = 9    # px at 1296 wide: village counters are 14 tall, the ones inside the menu 10
 ZERO_MAX_DIST = 0.30   # measured: another '0' of the counter ~0.1, any other digit >= 0.6
 _zero: tuple[np.ndarray, float] | None = None
 
@@ -135,7 +137,9 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
     ref, ref_aspect = _zero_ref()
     for thresh in (ocr.THRESH, *ocr.FALLBACK_THRESH):
         glyphs = [g for g in ocr.segment(crop, thresh=thresh) if g.size]
-        if len(glyphs) < 2:      # a counter has at least digit, slash, digit
+        if not 3 <= len(glyphs) <= 5:      # a counter is digit, slash, digit (up to two digits each)
+            continue
+        if min(g.shape[0] for g in glyphs) < MIN_COUNTER_GLYPH_H:     # small print of lists and timers is not a counter
             continue
         feat, asp = ocr.features(glyphs[0])
         dist = float(np.abs(feat - ref).mean() + ocr.ASPECT_W * abs(asp - ref_aspect))
@@ -145,6 +149,13 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
 
 WALL_HSV_LOW, WALL_HSV_HIGH = (85, 25, 110), (110, 95, 215)    # steel-blue walls, measured on real captures
 WALL_MIN_AREA = 8000                                            # px at 1296 wide; the block is 25 000+
+HUD_ZONES = (                  # the game's own buttons: never click a wall spot inside them
+    (0.78, 0.0, 1.0, 0.33),    # resource bars, gems, shield timer
+    (0.0, 0.0, 0.14, 0.24),    # profile
+    (0.0, 0.24, 0.12, 0.66),   # chat, league, events on the left
+    (0.0, 0.80, 0.30, 1.0),    # Batalla and the bottom-left buttons
+    (0.84, 0.76, 1.0, 1.0),    # Construir and the shop
+)
 WALL_RISE_PX = 14                                               # click this far above the block's lowest point
 
 
@@ -166,4 +177,7 @@ def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
     low = ys.max()
     x = float(xs[ys >= low - 4].mean())
     h, w = frame.shape[:2]
-    return x / w, max(0, low - WALL_RISE_PX) / h
+    spot = x / w, max(0, low - WALL_RISE_PX) / h
+    if any(zx0 <= spot[0] <= zx1 and zy0 <= spot[1] <= zy1 for zx0, zy0, zx1, zy1 in HUD_ZONES):
+        return None          # the block is under the game's own buttons: pressing there opens the shop
+    return spot

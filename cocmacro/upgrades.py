@@ -29,17 +29,43 @@ def free_slots(scr: Screen, cfg: Config) -> dict[str, int | None]:
     }
 
 
+def _close_menu(scr: Screen, cfg: Config, check, sleep) -> None:
+    """Close the Construir menu, but only when it is really open: its X sits where the gold bar is in the
+    village, and pressing the bar opens the gem shop."""
+    for _ in range(3):
+        if scr.has("menu_close_x"):
+            check()
+            scr.click(*cfg.buttons["build_close"])
+            sleep(CLICK_DELAY)
+            return
+        sleep(0.4)
+
+
+def _dismiss_no_builder(scr: Screen, cfg: Config, log, check, sleep) -> bool:
+    """The game answers an upgrade with no free builder by offering to finish another task for gems. Close
+    that notice with its X (never the green gem button) and report that it was there."""
+    if not scr.has("no_builder_dialog"):
+        return False
+    log("No hay constructores libres: cierro el aviso sin gastar gemas")
+    check()
+    scr.click(*cfg.buttons["dialog_close"])
+    sleep(CLICK_DELAY)
+    return True
+
+
 def _reset_view(scr: Screen, cfg: Config, check, sleep) -> None:
     """Open and close the Construir menu: drops the wall selection and leaves the village as the bot expects."""
-    for name in ("build", "build_close"):
-        check()
-        scr.click(*cfg.buttons[name])
-        sleep(CLICK_DELAY)
+    check()
+    scr.click(*cfg.buttons["build"])
+    sleep(CLICK_DELAY + 0.4)
+    _close_menu(scr, cfg, check, sleep)
 
 
 def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
     """Upgrade as many walls as affordable for each resource. Returns True if at least one upgrade started."""
     started = False
+    if scr.has("menu_close_x"):               # a menu left open would swallow the wheel and the clicks
+        _close_menu(scr, cfg, check, sleep)
     zoom_out = getattr(scr, "zoom_out", None)
     if zoom_out:
         check()
@@ -50,6 +76,9 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
         selected = False
         finder = getattr(scr, "wall_spot", None)
         found = finder() if finder else None      # located on screen: the camera is not always where we left it
+        if finder and found is None:
+            log("No veo el bloque de muros: no pulso nada")
+            return started
         for dx, dy in SPOT_OFFSETS:
             check()
             x, y = found or cfg.buttons["wall_spot"]
@@ -58,6 +87,9 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
             if scr.has("wall_panel"):
                 selected = True
                 break
+            if not scr.has("battle"):             # some other screen opened (shop, window...): touch nothing more
+                log("Se abrio una pantalla inesperada: paro las mejoras de muros")
+                return started
         if not selected:
             log("Panel de muro no encontrado, no hay muros para mejorar")
             break
@@ -107,16 +139,20 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
         scr.click(*cfg.buttons[f"wall_up_{resource}"])
         sleep(CLICK_DELAY)
 
-        # Confirm the 'Mejorar muros' dialog (only that exact dialog has this Vale)
+        # Only the exact "Mejorar muros" dialog is confirmed (its title must be on screen)
         sleep(0.8)
-        pos = scr.find("confirm_upgrade") if scr.has("confirm_upgrade") else None
+        if _dismiss_no_builder(scr, cfg, log, check, sleep):
+            return started
+        pos = scr.find("confirm_upgrade") if scr.has("walls_dialog") else None
         if pos is None:
             log(f"No aparece el dialogo de mejora de muros ({resource})")
             _reset_view(scr, cfg, check, sleep)
             continue
         check()
         scr.click(*pos)
-        sleep(CLICK_DELAY)
+        sleep(CLICK_DELAY + 0.6)
+        if _dismiss_no_builder(scr, cfg, log, check, sleep):
+            return started
         started = True
 
     _reset_view(scr, cfg, check, sleep)
@@ -205,7 +241,9 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
             return False
         check()
         scr.click(*cfg.buttons["upgrade_confirm"])      # the green button; the grey one is the hammer item
-        sleep(CLICK_DELAY + 0.4)
+        sleep(CLICK_DELAY + 0.6)
+        if _dismiss_no_builder(scr, cfg, log, check, sleep):
+            return False
         return True
     finally:
         if scr.has("upgrade_window"):                   # still open: refused or not confirmed
@@ -235,7 +273,4 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep) -> bool:
                 break
         return started
     finally:
-        if scr.has("menu_close_x"):
-            check()
-            scr.click(*cfg.buttons["build_close"])
-            sleep(CLICK_DELAY)
+        _close_menu(scr, cfg, check, sleep)
