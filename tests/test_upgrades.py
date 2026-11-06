@@ -16,6 +16,15 @@ class _Abort(Exception):
     pass
 
 
+ROW = (0.87, 0.20)
+
+
+@pytest.fixture(autouse=True)
+def _first_row_on_screen(monkeypatch):
+    """The fake screens have no pixels: say where the first row of the list is, unless a test says otherwise."""
+    monkeypatch.setattr(vision, "first_upgrade_row", lambda _frame: ROW)
+
+
 # ── helpers ──────────────────────────────────────────────────────────
 
 
@@ -314,7 +323,7 @@ def test_busy_pets_have_no_filter_and_use_the_assigned_header(monkeypatch):
     upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
     n = scr.click_names
     assert "tab_pets" in n and "filter" not in n and "upgrade_confirm" in n
-    assert scr.clicks[n.index("tab_pets") + 1] == (0.87, 0.14 + 0.075)
+    assert ROW in scr.clicks and n.index("upgrade_confirm") > n.index("tab_pets")
 
 
 def test_busy_never_touches_the_forge_tab(monkeypatch):
@@ -529,3 +538,118 @@ def test_busy_closes_the_no_builder_notice_after_confirming(monkeypatch):
     assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is False
     n = scr.click_names
     assert n.index("dialog_close") > n.index("upgrade_confirm")
+
+
+class DrainScreen(FakeScreen):
+    """The tab counter drops by one every time the green Confirmar is pressed, like the real menu."""
+
+    def __init__(self, free, stick=False, **kw):
+        super().__init__(**kw)
+        self.free, self.stick, self.confirms = free, stick, 0
+
+    def click(self, x, y):
+        super().click(x, y)
+        if self.click_names[-1] == "upgrade_confirm":
+            self.confirms += 1
+            if not self.stick:
+                self.free -= 1
+
+
+def _drain(monkeypatch, scr, red_after=None, researchers=0):
+    cfg = _busy_cfg()
+    monkeypatch.setattr(vision, "free_count", lambda _f, r: scr.free if r == cfg.regions["tab_count_builders"]
+                        else (researchers if r == cfg.regions["tab_count_researchers"] else 0))
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: red_after is not None and scr.confirms >= red_after)
+    return cfg
+
+
+def _drain_screen(free, **kw):
+    return DrainScreen(free, has_templates={"menu_close_x": True, "filter_permanent_on": True,
+                                            "filter_cost_min_on": True, "upgrade_window": True},
+                       find_templates={"filtered_header": (0.87, 0.46)}, **kw)
+
+
+def test_busy_keeps_upgrading_a_tab_until_its_counter_reaches_zero(monkeypatch):
+    scr = _drain_screen(3)
+    cfg = _drain(monkeypatch, scr)
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is True
+    assert scr.confirms == 3 and scr.free == 0
+
+
+def test_busy_stops_a_tab_when_the_cheapest_item_cannot_be_paid(monkeypatch):
+    """Not enough resources: it does not insist, the bot goes to attack."""
+    scr = _drain_screen(3)
+    cfg = _drain(monkeypatch, scr, red_after=1)          # the second cheapest price is red
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is True
+    assert scr.confirms == 1 and scr.free == 2 and scr.click_names[-1] == "build_close"
+
+
+def test_busy_does_not_loop_when_the_counter_never_drops(monkeypatch):
+    scr = _drain_screen(2, stick=True)
+    cfg = _drain(monkeypatch, scr)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
+    assert scr.confirms == 1
+
+
+def test_busy_drain_is_capped_per_tab(monkeypatch):
+    from cocmacro.upgrades import MAX_PER_TAB
+    scr = _drain_screen(99)
+    cfg = _drain(monkeypatch, scr)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
+    assert scr.confirms == MAX_PER_TAB
+
+
+def test_busy_drains_researchers_after_builders(monkeypatch):
+    scr = _drain_screen(0)
+    cfg = _drain(monkeypatch, scr, researchers=1)
+    scr.free = 0
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is True
+    assert "tab_researchers" in scr.click_names and "tab_builders" not in scr.click_names
+
+
+def test_busy_presses_nothing_when_the_list_is_not_on_screen(monkeypatch):
+    cfg = _free(monkeypatch, builders=1)
+    monkeypatch.setattr(vision, "first_upgrade_row", lambda _frame: None)
+    scr = _busy_screen()
+    logs = []
+    assert upgrade_busy(scr, cfg, logs.append, lambda: None, _nop_sleep) is False
+    assert ROW not in scr.clicks and "upgrade_confirm" not in scr.click_names
+    assert any("No encuentro la lista" in m for m in logs) and scr.click_names[-1] == "build_close"
+
+
+def test_busy_needs_no_banner_to_find_the_first_row_of_the_researchers_tab(monkeypatch):
+    """Real finding: that tab has no 'Filtrado' banner, only the progress bars of what is being upgraded."""
+    cfg = _free(monkeypatch, researchers=1)
+    scr = FakeScreen(has_templates={"menu_close_x": True, "filter_cost_min_on": True, "upgrade_window": True})
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is True
+    assert "upgrade_confirm" in scr.click_names
+
+
+def test_busy_presses_no_row_when_the_menu_did_not_open(monkeypatch):
+    """Review finding: with the menu closed the list column is the village HUD (gold bar, gem shop)."""
+    cfg = _free(monkeypatch, builders=1)
+    scr = FakeScreen(has_templates={"menu_close_x": False, "filter_permanent_on": True,
+                                    "filter_cost_min_on": True, "upgrade_window": True})
+    scr._menu_open = False
+    logs = []
+    assert upgrade_busy(scr, cfg, logs.append, lambda: None, _nop_sleep) is False
+    assert ROW not in scr.clicks and "upgrade_confirm" not in scr.click_names
+    assert any("no se abrio" in m for m in logs)
+
+
+def test_busy_reads_the_counter_again_when_it_blinks_after_an_upgrade(monkeypatch):
+    scr = _drain_screen(2)
+    cfg = _busy_cfg()
+    calls = {"n": 0}
+
+    def free(_f, region):
+        if region != cfg.regions["tab_count_builders"]:
+            return 0
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return None                      # blurry right after the confirm
+        return scr.free
+    monkeypatch.setattr(vision, "free_count", free)
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
+    assert scr.confirms == 2 and scr.free == 0
