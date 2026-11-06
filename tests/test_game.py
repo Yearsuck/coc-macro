@@ -152,3 +152,36 @@ def test_zoom_out_gives_the_game_a_few_rounds_before_judging_the_view_stable(tmp
     monkeypatch.setattr(game.time, "sleep", lambda s: None)
     game._Screen(g).zoom_out()
     assert len(wheel) >= 3 * 4
+
+
+def _menu_game(tmp_path, monkeypatch, frame_name, **tpl):
+    """RealGame whose 'menu_close_x' / 'upgrade_window' are crops of the scout screen's Siguiente button."""
+    frame = cv2.imread(str(FIX / "f004.png"))
+    for name in tpl:
+        templates.save_template(name, frame, (0.909, 0.7517), (0.06, 0.07), tmp_path)
+    g, clicks = make(tmp_path, monkeypatch, frame_name)
+    g.cfg.buttons.update({"build_close": (0.984, 0.032), "upgrade_window_close": (0.883, 0.075)})
+    return g, clicks
+
+
+def test_close_menu_presses_the_x_where_it_really_is(tmp_path, monkeypatch):
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f004.png", menu_close_x=1)
+    g.cfg.buttons["build_close"] = (0.909, 0.7517)                  # the X is found right where it is expected
+    assert g.close_menu() is True and clicks == [(0.909, 0.7517)]
+
+
+def test_close_menu_never_presses_the_corner_for_a_red_x_somewhere_else(tmp_path, monkeypatch):
+    """The upgrade window and other dialogs have the same red X; the corner is the gold bar (gem shop)."""
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f004.png", menu_close_x=1)
+    assert g.close_menu() is False and clicks == []                 # found at (0.909, 0.75), expected at the corner
+
+
+def test_close_menu_does_nothing_on_a_screen_without_the_x(tmp_path, monkeypatch):
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f019.png", menu_close_x=1)
+    g.cfg.buttons["build_close"] = (0.909, 0.7517)
+    assert g.close_menu() is False and clicks == []
+
+
+def test_close_menu_closes_a_left_over_upgrade_window_with_its_own_x(tmp_path, monkeypatch):
+    g, clicks = _menu_game(tmp_path, monkeypatch, "f004.png", upgrade_window=1, menu_close_x=1)
+    assert g.close_menu() is True and clicks == [(0.883, 0.075)]
