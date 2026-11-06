@@ -25,9 +25,9 @@ def test_cost_is_red_all_black():
     assert vision.cost_is_red(frame, (0.0, 0.0, 1.0, 1.0)) is False
 
 
-def test_cost_is_red_below_threshold():
+def test_cost_is_red_ignores_a_speck():
     frame = np.zeros((100, 300, 3), dtype=np.uint8)
-    frame[:5, :, :] = (0, 0, 255)
+    frame[0, :5, :] = (0, 0, 255)
     assert vision.cost_is_red(frame, (0.0, 0.0, 1.0, 1.0)) is False
 
 
@@ -251,3 +251,33 @@ def test_first_upgrade_row_is_none_without_a_list():
     assert vision.first_upgrade_row(cv2.imread(str(FIXTURES / "village_no_menu.png"))) is None
     assert vision.first_upgrade_row(np.zeros((729, 1296, 3), dtype=np.uint8)) is None
     assert vision.first_upgrade_row(np.zeros((5, 5, 3), dtype=np.uint8)) is None
+
+
+def test_cost_is_red_for_a_short_price_in_a_big_region():
+    """Review finding: a share of the REGION missed short prices. Real salmon price, region three times bigger."""
+    frame = cv2.imread(str(FIXTURES / "wall_panel_cost_red.png"))
+    assert vision.cost_is_red(frame, (0.53, 0.735, 0.635, 0.79)) is True
+
+
+def test_cost_is_red_false_for_white_digits_in_a_big_region():
+    frame = np.zeros((300, 600, 3), dtype=np.uint8)
+    cv2.putText(frame, "840", (250, 150), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+    assert vision.cost_is_red(frame, (0.0, 0.0, 1.0, 1.0)) is False
+    red = np.zeros((300, 600, 3), dtype=np.uint8)
+    cv2.putText(red, "840", (250, 150), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (110, 110, 255), 3)   # BGR salmon
+    assert vision.cost_is_red(red, (0.0, 0.0, 1.0, 1.0)) is True
+
+
+def test_first_upgrade_row_handles_a_thin_top_piece_and_the_end_of_the_list():
+    sand = cv2.cvtColor(np.uint8([[[13, 110, 160]]]), cv2.COLOR_HSV2BGR)[0, 0]
+    thin = np.zeros((729, 1296, 3), dtype=np.uint8)
+    thin[100:107, 1050:1280] = sand                    # a 7 px top piece (icon below it), then more sand
+    thin[112:150, 1050:1280] = sand
+    spot = vision.first_upgrade_row(thin)
+    assert spot is not None and abs(spot[1] * 729 - (100 + 24)) < 4      # anchored on the TOP piece, not the lower one
+    tabs = np.zeros((729, 1296, 3), dtype=np.uint8)
+    tabs[600:641, 1050:1280] = sand                    # sand that starts too low: that is the tab bar
+    assert vision.first_upgrade_row(tabs) is None
+    unbroken = np.zeros((729, 1296, 3), dtype=np.uint8)
+    unbroken[400:729, 1050:1280] = sand                # sand up to the end of the list area
+    assert vision.first_upgrade_row(unbroken) is not None

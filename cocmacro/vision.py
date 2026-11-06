@@ -7,11 +7,11 @@ import numpy as np
 from cocmacro import ocr
 
 Region = tuple[float, float, float, float]
-RED_SHARE = 0.08
+MIN_RED_PX = 10        # fewer red pixels than this is a speck, not a price
 
 __all__ = [
     "Region",
-    "RED_SHARE",
+    "MIN_RED_PX",
     "storage_full",
     "free_count",
     "cost_is_red",
@@ -27,7 +27,9 @@ def _valid(frame, region: Region) -> bool:
 
 
 def cost_is_red(frame: np.ndarray, region: Region) -> bool:
-    """True if red-dominant pixels (R>180 and R at least 70 above G and B) are at least RED_SHARE of region."""
+    """True if the price in `region` is in the game's 'cannot pay' colour. Digits are either white (payable) or
+    salmon (not payable, about 255,110,110), so the red pixels are compared with the white ones (at least half as
+    many) instead of with the size of the region: a short price in a big region must not read as payable."""
     if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
         return False
     if frame.shape[0] < 10 or frame.shape[1] < 10:
@@ -38,15 +40,11 @@ def cost_is_red(frame: np.ndarray, region: Region) -> bool:
     crop = ocr._crop(frame, region)
     if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
         return False
-
-    b = crop[:, :, 0]
-    g = crop[:, :, 1]
-    r = crop[:, :, 2]
-    # the game's 'cannot pay' red is salmon (about 255,110,110), white text has R close to G and B
-    red_mask = (r > 180) & ((r.astype(int) - np.maximum(g, b)) > 70)
-    total_pixels = crop.shape[0] * crop.shape[1]
-    share = np.count_nonzero(red_mask) / total_pixels
-    return bool(share >= RED_SHARE)
+    px = crop.astype(int)
+    b, g, r = px[..., 0], px[..., 1], px[..., 2]
+    red = int(np.count_nonzero((r > 180) & ((r - np.maximum(g, b)) > 70)))
+    white = int(np.count_nonzero((np.minimum(np.minimum(r, g), b) > 200) & ((px.max(axis=2) - px.min(axis=2)) < 40)))
+    return red >= MIN_RED_PX and red * 2 >= white       # payable digits are white and leave no red at all
 
 
 def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None = None) -> bool | None:
@@ -185,7 +183,8 @@ def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
 
 LIST_X = (0.80, 0.99)          # the Construir list column (a bit inside the red X side panel)
 LIST_Y = (0.07, 0.88)          # below the title, above the four tabs
-ROW_MIN_H = 0.012              # the first sand piece of a row is at least ~9 px tall at 729 high
+ROW_MIN_H = 0.008              # the first sand piece of a row is at least ~6 px tall at 729 high
+ROW_Y_MAX = 0.84               # a centre below this is on the tabs, not on a row
 ROW_H = 0.066                  # a row is ~48 px at 729 high
 ROW_X = 0.867
 
@@ -203,12 +202,14 @@ def first_upgrade_row(frame: np.ndarray) -> tuple[float, float] | None:
     sand = ((band[..., 0] >= 9) & (band[..., 0] <= 17) & (band[..., 1] >= 85) & (band[..., 1] <= 140)
             & (band[..., 2] >= 135))
     frac = sand.mean(axis=1)
-    start = None
-    for y in range(int(h * LIST_Y[0]), int(h * LIST_Y[1])):
-        if frac[y] >= 0.35 and start is None:
+    start, bottom = None, int(h * LIST_Y[1])
+    for y in range(int(h * LIST_Y[0]), bottom + 1):
+        sand_here = y < bottom and frac[y] >= 0.35
+        if sand_here and start is None:
             start = y
-        elif frac[y] < 0.35 and start is not None:
+        elif not sand_here and start is not None:
             if y - start >= h * ROW_MIN_H:
-                return ROW_X, start / h + ROW_H / 2
+                centre = start / h + ROW_H / 2
+                return (ROW_X, centre) if centre <= ROW_Y_MAX else None
             start = None
     return None
