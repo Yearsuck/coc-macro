@@ -225,3 +225,29 @@ def test_find_wall_spot_refuses_the_bottom_buttons_too():
     frame = np.zeros((729, 1296, 3), dtype=np.uint8)
     frame[500:720, 1150:1280] = steel               # ... or over Construir (~0.94, 0.97)
     assert vision.find_wall_spot(frame) is None
+
+
+def test_real_full_bars_are_full():
+    """Real capture with 29.5 M gold and 30 M elixir: both bars filled to the left end (first time seen)."""
+    frame = cv2.imread(str(FIXTURES / "storage_bars_full.png"))
+    assert frame is not None
+    assert vision.storage_full(frame, (0.815, 0.030, 0.950, 0.060), hue=GOLD_HUE) is True
+    assert vision.storage_full(frame, (0.815, 0.085, 0.950, 0.115), hue=ELIXIR_HUE) is True
+
+
+def test_first_upgrade_row_in_every_tab_of_the_menu():
+    """Real captures of the Construir list: the first AVAILABLE row, below the progress bars and headers."""
+    for name, row_center_px in (("menu_researchers_tab.png", 120),       # no 'Filtrado' banner on this tab
+                                ("menu_builders_tab_filtered.png", 301),  # five busy builders + banner above
+                                ("menu_pets_tab.png", 143)):              # 'Asignado' header above
+        frame = cv2.imread(str(FIXTURES / name))
+        spot = vision.first_upgrade_row(frame)
+        assert spot is not None, name
+        assert abs(spot[1] * frame.shape[0] - row_center_px) < 9, (name, spot)
+        assert 0.80 < spot[0] < 0.95                                    # inside the list column
+
+
+def test_first_upgrade_row_is_none_without_a_list():
+    assert vision.first_upgrade_row(cv2.imread(str(FIXTURES / "village_no_menu.png"))) is None
+    assert vision.first_upgrade_row(np.zeros((729, 1296, 3), dtype=np.uint8)) is None
+    assert vision.first_upgrade_row(np.zeros((5, 5, 3), dtype=np.uint8)) is None

@@ -181,3 +181,34 @@ def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
     if any(zx0 <= spot[0] <= zx1 and zy0 <= spot[1] <= zy1 for zx0, zy0, zx1, zy1 in HUD_ZONES):
         return None          # the block is under the game's own buttons: pressing there opens the shop
     return spot
+
+
+LIST_X = (0.80, 0.99)          # the Construir list column (a bit inside the red X side panel)
+LIST_Y = (0.07, 0.88)          # below the title, above the four tabs
+ROW_MIN_H = 0.012              # the first sand piece of a row is at least ~9 px tall at 729 high
+ROW_H = 0.066                  # a row is ~48 px at 729 high
+ROW_X = 0.867
+
+
+def first_upgrade_row(frame: np.ndarray) -> tuple[float, float] | None:
+    """Relative (x, y) of the centre of the first AVAILABLE row of the Construir list. Rows are sand-coloured
+    cards; the progress bars of what is already being upgraded are darker or green and the 'Filtrado' /
+    'Asignado' banners are other colours, so the first sand band is the top of the first row on any tab (a
+    picture or text may split a row into pieces, so only its top edge is used and half a row is added).
+    None if the list is not on screen."""
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[0] < 20 or frame.shape[1] < 20:
+        return None
+    h, w = frame.shape[:2]
+    band = cv2.cvtColor(frame[:, int(w * LIST_X[0]):int(w * LIST_X[1])], cv2.COLOR_BGR2HSV)
+    sand = ((band[..., 0] >= 9) & (band[..., 0] <= 17) & (band[..., 1] >= 85) & (band[..., 1] <= 140)
+            & (band[..., 2] >= 135))
+    frac = sand.mean(axis=1)
+    start = None
+    for y in range(int(h * LIST_Y[0]), int(h * LIST_Y[1])):
+        if frac[y] >= 0.35 and start is None:
+            start = y
+        elif frac[y] < 0.35 and start is not None:
+            if y - start >= h * ROW_MIN_H:
+                return ROW_X, start / h + ROW_H / 2
+            start = None
+    return None
