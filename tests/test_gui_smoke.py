@@ -26,9 +26,10 @@ def app(tk_root, tmp_path, monkeypatch):
     monkeypatch.setattr(gui.hotkeys, "start", lambda *a, **k: (lambda: None))
     monkeypatch.setattr(updater, "check", lambda current: None)
 
-    def no_game():
+    def no_game(title=""):
         raise winctl.WindowNotFound("no game")
     monkeypatch.setattr(gui.winctl, "find_game_window", no_game)
+    monkeypatch.setattr(gui.winctl, "list_game_windows", lambda: [])
     a = gui.App(tk_root)
     tk_root.update()
     yield a
