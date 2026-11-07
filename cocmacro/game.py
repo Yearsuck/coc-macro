@@ -12,6 +12,10 @@ from cocmacro.recorder import Recording
 # Template(s) whose presence identifies each screen.
 SCREEN_TEMPLATES = {"home": ["battle"], "scout": ["next"], "confirm": ["ok"], "results": ["back"]}
 DEBUG_KEEP = 60     # newest debug images kept
+# The inactivity dialog took the click at (0.355, 0.571) in one window and only at (0.355, 0.576) in another
+# (measured live), so the press tries a few nearby points, keeping the focus, until the dialog is gone.
+RELOAD_TAP_OFFSETS = ((0.0, 0.0), (0.0, 0.005), (0.0, -0.005), (0.015, 0.005), (-0.015, 0.005), (0.0, 0.010))
+RELOAD_TAP_POLLS, RELOAD_TAP_POLL_S = 4, 0.5      # looks (2 s) at the dialog after each tap
 
 
 GOLD_HUE, ELIXIR_HUE = (18, 40), (135, 175)   # OpenCV hue of the gold and elixir storage bars
@@ -122,7 +126,14 @@ class RealGame:
             return False
         x, y = self.cfg.buttons["reload_inactive"]
         with winctl.focused(self.win):
-            winctl.click(self.win, x, y)
+            # the focus stays on the window the whole time: giving it back right after a click made the dialog
+            # ignore it (measured live)
+            for dx, dy in RELOAD_TAP_OFFSETS:
+                winctl.click(self.win, x + dx, y + dy)
+                for _ in range(RELOAD_TAP_POLLS):
+                    time.sleep(RELOAD_TAP_POLL_S)
+                    if not self.inactivity_dialog():
+                        return True
         return True
 
     def click_button(self, name: str) -> None:
