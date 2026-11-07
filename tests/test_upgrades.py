@@ -5,6 +5,7 @@ from cocmacro import vision
 from cocmacro.config import Config
 from cocmacro.upgrades import (
     MAX_ADDS,
+    _price_region,
     _select_filter,
     free_slots,
     upgrade_busy,
@@ -499,7 +500,7 @@ def test_busy_upgrades_every_tab_with_a_free_slot_in_one_pass(monkeypatch):
 def test_busy_does_not_confirm_when_the_window_price_is_red(monkeypatch):
     cfg = _busy_cfg()
     monkeypatch.setattr(vision, "free_count", lambda _f, r: 1 if r == cfg.regions["tab_count_builders"] else 0)
-    monkeypatch.setattr(vision, "cost_is_red", lambda _f, region: region == cfg.regions["upgrade_cost"])
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, region: region == _price_region(cfg))
     scr = _busy_screen()
     logs = []
     assert upgrade_busy(scr, cfg, logs.append, lambda: None, _nop_sleep) is False
@@ -914,3 +915,11 @@ def test_menu_opened_says_no_after_every_look_failed():
     pauses = []
     assert _menu_opened(scr, pauses.append, tries=4) is False
     assert len(pauses) == 3
+
+
+def test_the_price_region_stops_above_the_struck_through_full_price():
+    cfg = _cfg()
+    cfg.regions["upgrade_cost"] = (0.66, 0.84, 0.72, 0.90)          # saved by an older version
+    assert _price_region(cfg) == (0.66, 0.84, 0.72, 0.885)
+    cfg.regions["upgrade_cost"] = (0.66, 0.84, 0.72, 0.87)          # already short: left alone
+    assert _price_region(cfg) == (0.66, 0.84, 0.72, 0.87)
