@@ -22,6 +22,7 @@ class Config:
     surrender_time_s: int = 140  # surrender when the clock shows less than this (2:20); 0 = off
     auto_check_updates: bool = True
     mode: str = "none"             # "none" | "walls" | "busy": what to do between attacks
+    prioritize_heroes: bool = False  # busy mode: upgrade a hero first (Heroe filter) when one can be upgraded
     stop_when_full: bool = False   # do not attack while the gold and elixir storages are full
     deployment: str = "default"
     aspect: float | None = None
