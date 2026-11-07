@@ -140,6 +140,28 @@ def is_foreground(win: GameWindow) -> bool:
 
 VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
 _focus_lock = threading.Lock()      # one window at a time takes the focus
+# Every Play Games window of the account lives in ONE crosvm process, so they share one input channel: a drag
+# posted to a window while another window is also being driven gets mixed up with it (live, two tabs: only one
+# of the two accounts managed to deploy its troops at a time). All posted input goes through this lock; a
+# deployment holds it for its whole replay, so the accounts take turns. Re-entrant: a routine that holds it
+# can still click.
+_input_lock = threading.RLock()
+
+
+@contextlib.contextmanager
+def exclusive_input(stop: threading.Event | None = None, poll: float = 0.2):
+    """Hold the input channel. Yields True once it is held, or False if `stop` was set while waiting (the
+    caller must then do nothing)."""
+    got = False
+    while not got:
+        got = _input_lock.acquire(timeout=poll)
+        if not got and stop is not None and stop.is_set():
+            break
+    try:
+        yield got
+    finally:
+        if got:
+            _input_lock.release()
 
 
 def _foreground(api, hwnd) -> None:
@@ -244,13 +266,15 @@ def post_wheel(win: GameWindow, x: float, y: float, delta: int) -> None:
     sx, sy = ox + round(x * cw), oy + round(y * ch)
     wparam = ((delta & 0xFFFF) << 16)
     lparam = ((sy & 0xFFFF) << 16) | (sx & 0xFFFF)
-    user32.PostMessageW(win.hwnd, WM_MOUSEWHEEL, wparam, lparam)
+    with _input_lock:
+        user32.PostMessageW(win.hwnd, WM_MOUSEWHEEL, wparam, lparam)
 
 
 def click(win: GameWindow, x: float, y: float, hold_s: float = 0.08) -> None:
-    post_mouse(win, "down", x, y)
-    time.sleep(hold_s)
-    post_mouse(win, "up", x, y)
+    with _input_lock:                  # the press and the release of a tap must not be split by another window
+        post_mouse(win, "down", x, y)
+        time.sleep(hold_s)
+        post_mouse(win, "up", x, y)
 
 
 def screen_to_rel(win: GameWindow, sx: int, sy: int) -> tuple[float, float] | None:

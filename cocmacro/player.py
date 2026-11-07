@@ -10,7 +10,15 @@ _CHUNK = 0.1
 
 def play(win, rec: Recording, stop: threading.Event, sleep=time.sleep,
          post=winctl.post_mouse, post_wheel=winctl.post_wheel) -> bool:
-    """Returns False if stopped early. Never leaves the button pressed."""
+    """Returns False if stopped early. Never leaves the button pressed. Holds the shared input channel for the
+    whole replay: two windows driven at once mix their drags up (see winctl.exclusive_input)."""
+    with winctl.exclusive_input(stop) as got:
+        if not got:
+            return False
+        return _replay(win, rec, stop, sleep, post, post_wheel)
+
+
+def _replay(win, rec: Recording, stop: threading.Event, sleep, post, post_wheel) -> bool:
     down, last = False, (0.0, 0.0)
     for ev in rec.events:
         remaining = ev.dt

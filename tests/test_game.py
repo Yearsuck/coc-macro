@@ -341,3 +341,20 @@ def test_f8_during_the_reload_taps_lets_go_at_once(tmp_path, monkeypatch):
     monkeypatch.setattr(winctl, "click", lambda win, x, y, hold_s=0.08: (taps.append((x, y)), g.stop.set()))
     assert g.reload_if_disconnected() is True
     assert len(taps) == 1                                  # the stop flag ended the sequence after the first tap
+
+
+def test_reload_stopped_while_waiting_for_the_input_does_not_take_the_focus(tmp_path, monkeypatch):
+    """F8 while the other account is deploying: no focus grab, no click."""
+    import contextlib
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: True)
+    taken = []
+    monkeypatch.setattr(winctl, "focused", lambda win, **kw: (taken.append(1), contextlib.nullcontext())[1])
+
+    @contextlib.contextmanager
+    def not_got(stop=None, poll=0.2):
+        yield False
+    monkeypatch.setattr(winctl, "exclusive_input", not_got)
+    assert g.reload_if_disconnected() is True
+    assert taken == [] and clicks == []
