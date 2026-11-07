@@ -74,3 +74,57 @@ def test_shipped_buttons_are_never_taken_for_each_other():
             frame = cv2.copyMakeBorder(tb, 6, 6, 6, 6, cv2.BORDER_REPLICATE)
             margin = 0.05 if a in templates.STRICT_NAMES else 0.1    # look-alike filter buttons use the strict cut
             assert cv2.matchTemplate(frame, ta, cv2.TM_CCOEFF_NORMED).max() < templates.threshold_for(a) - margin, (a, b)
+
+
+def _spots(monkeypatch):
+    """Where the synthetic frames below draw the X and the label (relative centres)."""
+    monkeypatch.setitem(templates.ALTERNATIVES, "upgrade_window", (
+        (("upgrade_window", None),),
+        (("upgrade_window_x", (270 / 300, 25 / 200)), ("upgrade_window_confirm", (150 / 300, 162.5 / 200)))))
+
+
+def _window_frame():
+    return np.full((200, 300, 3), 127, dtype=np.uint8)
+
+
+def test_upgrade_window_is_seen_by_its_x_and_confirm_label_when_the_title_shrinks(tmp_path, monkeypatch):
+    _spots(monkeypatch)
+    """Long building names shrink the title text, so the title crop misses; the X and the label do not."""
+    frame = _window_frame()
+    frame[10:40, 250:290] = noise(3, 30, 40)                     # red X
+    frame[150:175, 100:200] = noise(4, 25, 100)                  # green button label
+    templates.save_template("upgrade_window", noise(9, 30, 100), (0.5, 0.5), (0.3, 0.2), tmp_path)   # not on screen
+    templates.save_template("upgrade_window_x", frame, (270 / 300, 25 / 200), (40 / 300, 30 / 200), tmp_path)
+    templates.save_template("upgrade_window_confirm", frame, (150 / 300, 162.5 / 200), (100 / 300, 25 / 200), tmp_path)
+    assert templates.match(frame, "upgrade_window", tmp_path) is True
+
+
+def test_upgrade_window_needs_both_the_x_and_the_confirm_label(tmp_path, monkeypatch):
+    _spots(monkeypatch)
+    frame = _window_frame()
+    frame[10:40, 250:290] = noise(3, 30, 40)
+    templates.save_template("upgrade_window", noise(9, 30, 100), (0.5, 0.5), (0.3, 0.2), tmp_path)
+    templates.save_template("upgrade_window_x", frame, (270 / 300, 25 / 200), (40 / 300, 30 / 200), tmp_path)
+    templates.save_template("upgrade_window_confirm", noise(5, 25, 100), (0.5, 0.5), (100 / 300, 25 / 200), tmp_path)
+    assert templates.match(frame, "upgrade_window", tmp_path) is False       # a lone red X is any window
+
+
+def test_upgrade_window_title_alone_still_counts(tmp_path):
+    frame = noise(1)
+    templates.save_template("upgrade_window", frame, (0.5, 0.5), (0.4, 0.3), tmp_path)
+    assert templates.match(frame, "upgrade_window", tmp_path) is True
+
+
+def test_an_x_and_a_label_in_the_wrong_place_are_another_dialog(tmp_path, monkeypatch):
+    """Other dialogs have a red X and a green Confirmar too: they must not pass for the upgrade window."""
+    _spots(monkeypatch)
+    frame = _window_frame()
+    frame[10:40, 250:290] = noise(3, 30, 40)
+    frame[150:175, 100:200] = noise(4, 25, 100)
+    templates.save_template("upgrade_window", noise(9, 30, 100), (0.5, 0.5), (0.3, 0.2), tmp_path)
+    templates.save_template("upgrade_window_x", frame, (270 / 300, 25 / 200), (40 / 300, 30 / 200), tmp_path)
+    templates.save_template("upgrade_window_confirm", frame, (150 / 300, 162.5 / 200), (100 / 300, 25 / 200), tmp_path)
+    moved = _window_frame()
+    moved[100:130, 20:60] = frame[10:40, 250:290]                 # the X far from its corner
+    moved[150:175, 100:200] = frame[150:175, 100:200]
+    assert templates.match(moved, "upgrade_window", tmp_path) is False
