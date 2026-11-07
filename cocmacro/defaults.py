@@ -23,6 +23,7 @@ BUTTONS = {
     "tab_builders": (0.764, 0.930), "tab_researchers": (0.833, 0.930), "tab_pets": (0.967, 0.930),
     "upgrade_confirm": (0.698, 0.850), "upgrade_window_close": (0.883, 0.075),
     "dialog_close": (0.669, 0.333),      # X of the "No hay constructores libres" notice
+    "reload_inactive": (0.355, 0.571),   # VOLVER A CARGAR of the inactivity dialog
 }
 REGIONS = {
     "free_builders": (0.905, 0.797, 0.945, 0.822), "free_researchers": (0.948, 0.797, 0.988, 0.822),

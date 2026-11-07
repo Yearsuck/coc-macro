@@ -12,6 +12,11 @@ from cocmacro.recorder import Recording
 # Template(s) whose presence identifies each screen.
 SCREEN_TEMPLATES = {"home": ["battle"], "scout": ["next"], "confirm": ["ok"], "results": ["back"]}
 DEBUG_KEEP = 60     # newest debug images kept
+# The inactivity dialog took the click at (0.355, 0.571) in one window and only at (0.355, 0.576) in another
+# (measured live), so the press tries a few nearby points, keeping the focus, until the dialog is gone.
+RELOAD_TAP_OFFSETS = ((0.0, 0.0), (0.0, 0.005), (0.0, -0.005), (0.015, 0.005), (-0.015, 0.005), (0.0, 0.010))
+RELOAD_TAP_POLLS, RELOAD_TAP_POLL_S = 4, 0.5      # looks (2 s) at the dialog after each tap
+INACTIVITY_TEMPLATES = (("reload_inactive_title", 0.80), ("reload_inactive_body", 0.75))
 
 
 GOLD_HUE, ELIXIR_HUE = (18, 40), (135, 175)   # OpenCV hue of the gold and elixir storage bars
@@ -109,6 +114,34 @@ class RealGame:
         if found is None or found[0] < templates.THRESHOLD:
             return False
         winctl.click(self.win, found[1][0], found[1][1])
+        return True
+
+    def inactivity_dialog(self) -> bool:
+        """The 'Estas ahi? Se te ha desconectado por inactividad' dialog is on screen. Its title AND its body
+        text must both match: the 'Conexion perdida / otro dispositivo' dialog has the same dark box and a
+        similar button, and pressing that one would kick the account's other session. Measured on real frames:
+        the true dialog scores 0.83-1.0 on both crops, every screen without it 0.52 or less."""
+        frame = frames.grab(self.win)
+        return all(templates.match(frame, name, self.tpl_dir, threshold)
+                   for name, threshold in INACTIVITY_TEMPLATES)
+
+    def reload_if_disconnected(self) -> bool:
+        """Press VOLVER A CARGAR if the inactivity dialog is visible. True if pressed. The dialog only takes
+        the click while the window is the active one, so it gets the focus for the press."""
+        if not self.inactivity_dialog():
+            return False
+        x, y = self.cfg.buttons["reload_inactive"]
+        with winctl.focused(self.win):
+            # the focus stays on the window the whole time: giving it back right after a click made the dialog
+            # ignore it (measured live)
+            for dx, dy in RELOAD_TAP_OFFSETS:
+                if self.stop.is_set():           # F8: let go of the focus right away
+                    return True
+                winctl.click(self.win, x + dx, y + dy)
+                for _ in range(RELOAD_TAP_POLLS):
+                    time.sleep(RELOAD_TAP_POLL_S)
+                    if self.stop.is_set() or not self.inactivity_dialog():
+                        return True
         return True
 
     def click_button(self, name: str) -> None:
