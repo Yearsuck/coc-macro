@@ -13,6 +13,7 @@ __all__ = [
     "Region",
     "MIN_RED_PX",
     "storage_full",
+    "dark_storage_full",
     "free_count",
     "cost_is_red",
 ]
@@ -102,6 +103,34 @@ def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None 
     if fill_cols / n_cols >= 0.8:
         return True
     if track_cols / n_cols >= 0.8:
+        return False
+    return None
+
+
+def dark_storage_full(frame: np.ndarray, region: Region) -> bool | None:
+    """Dark elixir bar: same idea as `storage_full` (fills from the icon on the right, full = the LEFT end is
+    fill) but its fill is dark purple (OpenCV hue ~141, S>130, V 30-100), too dark for the gold / elixir
+    gate, and only the lower rows of the bar show it flat (the upper ones carry a highlight). The track
+    (not full) is greenish-grey or a different hue. None if the region is invalid or ambiguous."""
+    if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
+        return None
+    x0, y0, x1, y1 = region
+    if x1 <= x0 or y1 <= y0 or frame.shape[0] < 10 or frame.shape[1] < 10:
+        return None
+    crop = ocr._crop(frame, region)
+    if crop.size == 0:
+        return None
+    h, w = crop.shape[:2]
+    band = crop[int(h * 0.62):int(h * 0.92), int(w * 0.02):max(int(w * 0.10), int(w * 0.02) + 2)]
+    if band.size == 0:
+        return None
+    hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
+    hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    fill = (hue >= 125) & (hue <= 160) & (sat > 130) & (val >= 30) & (val <= 100)
+    share = float(np.mean(fill))
+    if share >= 0.8:
+        return True
+    if share <= 0.2:
         return False
     return None
 
