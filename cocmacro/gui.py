@@ -236,6 +236,11 @@ class App:
                                        bg=CARD, fg=TEXT, activebackground=CARD, activeforeground=TEXT,
                                        selectcolor=BG, font=theme.font(9), highlightthickness=0, bd=0)
         self.full_chk.pack(anchor="w", pady=(6, 0))
+        self.hero_var = tk.BooleanVar(value=self.cfg.prioritize_heroes)
+        self.hero_chk = tk.Checkbutton(inner, text="Heroes primero (modo Mejorar lo mas barato)", variable=self.hero_var,
+                                       bg=CARD, fg=TEXT, activebackground=CARD, activeforeground=TEXT,
+                                       selectcolor=BG, font=theme.font(9), highlightthickness=0, bd=0)
+        self.hero_chk.pack(anchor="w", pady=(2, 0))
         theme.label(inner, "Despliegue", 10, True).pack(anchor="w", pady=(14, 4))
         self.combo = ttk.Combobox(inner, state="readonly", width=22, style="Dark.TCombobox",
                                   font=theme.font(10))
@@ -357,6 +362,7 @@ class App:
         self.combo.configure(state="disabled" if locked else "readonly")
         self.mode_combo.configure(state="disabled" if locked else "readonly")
         self.full_chk.configure(state="disabled" if locked else "normal")
+        self.hero_chk.configure(state="disabled" if locked else "normal")
         self.rules_caption.configure(text="REGLAS (BLOQUEADAS MIENTRAS ATACA)" if locked else "REGLAS")
 
     def _fit(self):
@@ -459,6 +465,7 @@ class App:
         self.cfg.deployment = self.combo.get() or self.cfg.deployment
         self.cfg.mode = vm.mode_from_label(self.mode_combo.get())
         self.cfg.stop_when_full = self.full_var.get()
+        self.cfg.prioritize_heroes = self.hero_var.get()
         self.cfg.auto_check_updates = self.auto_upd.get()
         DATA.mkdir(exist_ok=True)
         config.save(self.cfg, CFG_PATH)

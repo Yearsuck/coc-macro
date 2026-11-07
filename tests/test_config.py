@@ -84,3 +84,12 @@ def test_mode_defaults_and_old_config_loads(tmp_path):
     config.save(config.Config(mode="walls", stop_when_full=True), p)
     again = config.load(p)
     assert again.mode == "walls" and again.stop_when_full is True
+
+
+def test_prioritize_heroes_defaults_off_and_round_trips(tmp_path):
+    from cocmacro import config
+    assert config.Config().prioritize_heroes is False
+    cfg = config.Config()
+    cfg.prioritize_heroes = True
+    config.save(cfg, tmp_path / "c.json")
+    assert config.load(tmp_path / "c.json").prioritize_heroes is True
