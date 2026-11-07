@@ -16,8 +16,10 @@ CFG_PATH, TPL_DIR, REC_DIR = DATA / "config.json", DATA / "templates", DATA / "r
 WARNING = ("Supercell prohibe automatizar ataques con macros.\n"
            "Usar esta app puede suponer el BAN de tu cuenta. Lo haces bajo tu responsabilidad.\n\n"
            "F8 = parar todo, F9 = terminar de grabar un despliegue.")
-WIDTH = 880
+WIDTH = 900
 REFRESH_EVERY = 40          # polls (about 2 s) between status refreshes
+SCREEN_MARGIN = 110         # title bar + taskbar: the window is never taller than the screen minus this
+MIN_HEIGHT = 420
 
 
 class AccountPanel(tk.Frame):
@@ -41,17 +43,37 @@ class AccountPanel(tk.Frame):
         self.mode, self.phase, self.missing = "idle", None, []
         self.overlay: overlay.Overlay | None = None
         self._ticks = 0
+        self._make_scroll_area()
         self._build()
         self.refresh_recordings()
         self.refresh_state()
         self._after_id = self.root.after(50, self._poll)
 
     # -- layout --------------------------------------------------------
+    def _make_scroll_area(self):
+        """The whole panel scrolls: on a screen shorter than the panel (the window is capped to the screen) the
+        parts below the fold stay reachable instead of falling off the screen."""
+        self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, bd=0)
+        self.vbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview,
+                                  style="Dark.Vertical.TScrollbar")
+        self.canvas.configure(yscrollcommand=self.vbar.set)
+        self.vbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.content = tk.Frame(self.canvas, bg=BG)
+        self._content_id = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
+        self.content.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._content_id, width=e.width))
+
+    def scroll_by(self, units: int):
+        """Scroll the panel (the App routes the mouse wheel here); nothing to do when it all fits."""
+        if self.content.winfo_reqheight() > self.canvas.winfo_height():
+            self.canvas.yview_scroll(units, "units")
+
     def _build(self):
         pad = {"padx": 24}
         self._selector_row().pack(fill="x", pady=(16, 0), **pad)
         self._header().pack(fill="x", pady=(12, 0), **pad)
-        body = tk.Frame(self, bg=BG)
+        body = tk.Frame(self.content, bg=BG)
         body.pack(fill="x", pady=(16, 0), **pad)
         body.columnconfigure(0, weight=1)
         self.left = tk.Frame(body, bg=BG)
@@ -60,14 +82,14 @@ class AccountPanel(tk.Frame):
         self._setup_card(self.left)
         self._reading_card(self.left)
         self._rules_card(body).grid(row=0, column=1, sticky="nsew", padx=(16, 0))
-        self.prep = self._prep_card(self)
+        self.prep = self._prep_card(self.content)
         self.prep.pack(fill="x", pady=(16, 0), **pad)
-        self.log_card = self._log_card(self)
+        self.log_card = self._log_card(self.content)
         self.log_card.pack(fill="both", expand=True, pady=(16, 0), **pad)
-        self._footer(self).pack(fill="x", pady=(10, 14), **pad)
+        self._footer(self.content).pack(fill="x", pady=(10, 14), **pad)
 
     def _selector_row(self) -> tk.Frame:
-        row = tk.Frame(self, bg=BG)
+        row = tk.Frame(self.content, bg=BG)
         theme.label(row, "Ventana", 10, True, bg=BG).pack(side="left", padx=(0, 8))
         self.win_combo = ttk.Combobox(row, state="readonly", width=36, style="Dark.TCombobox",
                                       font=theme.font(10))
@@ -78,7 +100,7 @@ class AccountPanel(tk.Frame):
         return row
 
     def _header(self) -> tk.Frame:
-        f = tk.Frame(self, bg=BG)
+        f = tk.Frame(self.content, bg=BG)
         title = tk.Frame(f, bg=BG)
         title.pack(side="left")
         theme.label(title, "CoC Macro", 17, True, bg=BG).pack(side="left")
@@ -426,7 +448,10 @@ class AccountPanel(tk.Frame):
     def _fit(self):
         """Width is fixed; the height follows what the current mode shows."""
         self.root.update_idletasks()
-        self.root.geometry(f"{WIDTH}x{self.root.winfo_reqheight()}")
+        self.canvas.configure(height=self.content.winfo_reqheight())     # natural size; the cap below scrolls
+        self.root.update_idletasks()
+        height = min(self.root.winfo_reqheight(), max(MIN_HEIGHT, self.root.winfo_screenheight() - SCREEN_MARGIN))
+        self.root.geometry(f"{WIDTH}x{height}")
 
     def _paint_stepper(self):
         for (lbl, bar), (_, state) in zip(self.step_cells, vm.phase_steps(self.phase)):
@@ -778,17 +803,28 @@ class App:
         self.panel = self.panels[0]
 
         ctrl_row = tk.Frame(root, bg=BG)
-        ctrl_row.pack(fill="x", padx=24, pady=(8, 10))
+        ctrl_row.pack(side="bottom", fill="x", padx=24, pady=(8, 10), before=self.nb)   # always visible
         self.btn_add = theme.button(ctrl_row, "+ Añadir cuenta", self.add_account, "secondary", 9, padx=10, pady=4)
         self.btn_add.pack(side="left")
         self._update_btn_add()
 
+        root.bind("<MouseWheel>", self._on_wheel)      # one handler for the whole window (replaces any older one)
         self.unregister = hotkeys.start(self._hotkey_stop, self._hotkey_end_record)
         root.protocol("WM_DELETE_WINDOW", self.close)
         if getattr(sys, "frozen", False):
             updater.cleanup_old(Path(sys.executable))
         if self.panel.cfg.auto_check_updates:
             threading.Thread(target=self.check_update, args=(False,), daemon=True).start()
+
+    def _on_wheel(self, event):
+        """Mouse wheel scrolls the visible tab, except over a log or a dropdown, which use it themselves."""
+        try:
+            if event.widget.winfo_class() in ("Text", "TCombobox", "Combobox"):
+                return
+            panel = self.nb.nametowidget(self.nb.select())
+        except (AttributeError, KeyError, tk.TclError):
+            return
+        panel.scroll_by(-1 if event.delta > 0 else 1)
 
     def _apply_notebook_style(self, root: tk.Tk):
         st = ttk.Style(root)
@@ -944,6 +980,7 @@ class App:
         """Stop timers, hotkeys and every panel; leaves the Tk root alone (tests reuse one)."""
         for p in self.panels:
             p.dispose()
+        self.root.unbind("<MouseWheel>")
         self.unregister()
 
     def close(self):
