@@ -57,3 +57,12 @@ def test_the_input_lock_is_released_when_a_replay_raises():
         pass
     with winctl.exclusive_input(poll=0.05) as got:       # would wait forever if the lock had leaked
         assert got is True
+
+
+def test_a_deployment_raises_its_window_above_a_covering_clash_window_first(monkeypatch):
+    from cocmacro import winctl
+    events = []
+    monkeypatch.setattr(winctl, "raise_above_overlapping", lambda win: events.append("raise"))
+    player.play(object(), _rec(2), threading.Event(), sleep=lambda s: None,
+                post=lambda *a: events.append("post"), post_wheel=lambda *a: None)
+    assert events == ["raise", "post", "post"]
