@@ -111,13 +111,18 @@ class RealGame:
         winctl.click(self.win, found[1][0], found[1][1])
         return True
 
+    def inactivity_dialog(self) -> bool:
+        """The 'Estas ahi? Se te ha desconectado por inactividad' dialog is on screen."""
+        return self._has(frames.grab(self.win), "reload_inactive")
+
     def reload_if_disconnected(self) -> bool:
-        """Press VOLVER A CARGAR if the inactivity dialog is visible. True if pressed."""
-        frame = frames.grab(self.win)
-        if not self._has(frame, "reload_inactive"):
+        """Press VOLVER A CARGAR if the inactivity dialog is visible. True if pressed. The dialog only takes
+        the click while the window is the active one, so it gets the focus for the press."""
+        if not self.inactivity_dialog():
             return False
         x, y = self.cfg.buttons["reload_inactive"]
-        winctl.click(self.win, x, y)
+        with winctl.focused(self.win):
+            winctl.click(self.win, x, y)
         return True
 
     def click_button(self, name: str) -> None:

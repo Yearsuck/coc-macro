@@ -5,7 +5,9 @@ Input: PostMessage mouse events with client coordinates, works without focus.
 A minimized window has a 0x0 client area and cannot be captured, so it is restored without
 activating it and sent to the bottom of the z-order (restore_if_minimized).
 """
+import contextlib
 import ctypes
+import threading
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -134,6 +136,37 @@ def find_game_window(title: str = "") -> GameWindow:
 
 def is_foreground(win: GameWindow) -> bool:
     return user32.GetForegroundWindow() == win.hwnd
+
+
+VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
+_focus_lock = threading.Lock()      # one window at a time takes the focus
+
+
+def _foreground(api, hwnd) -> None:
+    # a synthetic Alt press lets SetForegroundWindow through when another app owns the focus
+    api.keybd_event(VK_MENU, 0, 0, 0)
+    api.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+    api.SetForegroundWindow(hwnd)
+
+
+@contextlib.contextmanager
+def focused(win: GameWindow, api=None, sleep=time.sleep, settle: float = 0.4):
+    """Give the window the focus for a moment and hand it back afterwards. Normal clicks work on a window in
+    the background, but some Android dialogs of the game (the inactivity disconnect) ignore clicks while the
+    window is not the active one. Measured live 2026-11-07: the same posted click did nothing for minutes and
+    closed the dialog in 2 s once the window was active."""
+    api = api or user32
+    with _focus_lock:
+        prev = api.GetForegroundWindow()
+        taken = prev != win.hwnd
+        if taken:
+            _foreground(api, win.hwnd)
+            sleep(settle)
+        try:
+            yield
+        finally:
+            if taken and prev and api.IsWindow(prev):
+                _foreground(api, prev)
 
 
 def restore_if_minimized(win: GameWindow, api=None, sleep=time.sleep) -> bool:
