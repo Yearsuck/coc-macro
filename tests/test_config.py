@@ -93,3 +93,25 @@ def test_prioritize_heroes_defaults_off_and_round_trips(tmp_path):
     cfg.prioritize_heroes = True
     config.save(cfg, tmp_path / "c.json")
     assert config.load(tmp_path / "c.json").prioritize_heroes is True
+
+
+def test_window_title_and_account_name(tmp_path):
+    cfg = config.Config()
+    assert cfg.window_title == ""
+    assert cfg.account_name == ""
+
+    # Old config without these fields loads them with default empty strings
+    p = tmp_path / "old.json"
+    p.write_text('{"gold_min": 600000}', encoding="utf-8")
+    loaded = config.load(p)
+    assert loaded.window_title == ""
+    assert loaded.account_name == ""
+
+    # Save and load round-trips them
+    cfg.window_title = "Clash of Clans - Ernestitogamer04"
+    cfg.account_name = "Ernestitogamer04"
+    p2 = tmp_path / "named.json"
+    config.save(cfg, p2)
+    reloaded = config.load(p2)
+    assert reloaded.window_title == "Clash of Clans - Ernestitogamer04"
+    assert reloaded.account_name == "Ernestitogamer04"

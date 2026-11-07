@@ -5,7 +5,9 @@ Input: PostMessage mouse events with client coordinates, works without focus.
 A minimized window has a 0x0 client area and cannot be captured, so it is restored without
 activating it and sent to the bottom of the z-order (restore_if_minimized).
 """
+import contextlib
 import ctypes
+import threading
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -31,6 +33,10 @@ class WindowNotFound(Exception):
     pass
 
 
+class AmbiguousWindow(WindowNotFound):
+    pass
+
+
 class WindowMinimized(Exception):
     pass
 
@@ -38,6 +44,14 @@ class WindowMinimized(Exception):
 @dataclass(frozen=True)
 class GameWindow:
     hwnd: int
+    client_w: int
+    client_h: int
+
+
+@dataclass(frozen=True)
+class WindowInfo:
+    hwnd: int
+    title: str
     client_w: int
     client_h: int
 
@@ -70,25 +84,89 @@ def _client_size(hwnd) -> tuple[int, int]:
     return r.right, r.bottom
 
 
-def find_game_window() -> GameWindow:
-    found: list[int] = []
+def _enum_game_windows() -> list[WindowInfo]:
+    found: list[WindowInfo] = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def cb(hwnd, _):
         if user32.IsWindowVisible(hwnd) and _title(hwnd).startswith(TITLE_PREFIX) \
                 and _process_name(hwnd).startswith(PROCESS_NAME):
-            found.append(hwnd)
+            w, h = _client_size(hwnd)
+            found.append(WindowInfo(hwnd, _title(hwnd), w, h))
         return True
 
     user32.EnumWindows(cb, 0)
-    if not found:
-        raise WindowNotFound("Ventana de Clash of Clans no encontrada")
-    w, h = _client_size(found[0])
-    return GameWindow(found[0], w, h)
+    return found
+
+
+def list_game_windows() -> list[WindowInfo]:
+    return _enum_game_windows()
+
+
+def pick_window(windows: list[WindowInfo], title: str = "") -> WindowInfo:
+    """Select a game window by title, or the single open window when title is blank."""
+    clean = title.strip()
+    if not clean:
+        if len(windows) == 1:
+            return windows[0]
+        if not windows:
+            raise WindowNotFound("Ventana de Clash of Clans no encontrada")
+        raise AmbiguousWindow("Hay varias ventanas de Clash of Clans: elige una")
+
+    # Exact match beats a partial/prefix substring match
+    exact = [w for w in windows if w.title == title or w.title == clean]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise AmbiguousWindow(f"Hay varias ventanas de Clash of Clans con el titulo '{title}'")
+
+    needle = clean.lower()
+    matches = [w for w in windows if needle in w.title.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise AmbiguousWindow(f"Hay varias ventanas de Clash of Clans que coinciden con '{title}'")
+    raise WindowNotFound(f"Ventana de Clash of Clans no encontrada: '{title}'")
+
+
+def find_game_window(title: str = "") -> GameWindow:
+    w = pick_window(list_game_windows(), title)
+    return GameWindow(w.hwnd, w.client_w, w.client_h)
 
 
 def is_foreground(win: GameWindow) -> bool:
     return user32.GetForegroundWindow() == win.hwnd
+
+
+VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
+_focus_lock = threading.Lock()      # one window at a time takes the focus
+
+
+def _foreground(api, hwnd) -> None:
+    # a synthetic Alt press lets SetForegroundWindow through when another app owns the focus
+    api.keybd_event(VK_MENU, 0, 0, 0)
+    api.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+    api.SetForegroundWindow(hwnd)
+
+
+@contextlib.contextmanager
+def focused(win: GameWindow, api=None, sleep=time.sleep, settle: float = 0.4):
+    """Give the window the focus for a moment and hand it back afterwards. Normal clicks work on a window in
+    the background, but some Android dialogs of the game (the inactivity disconnect) ignore clicks while the
+    window is not the active one. Measured live 2026-11-07: the same posted click did nothing for minutes and
+    closed the dialog in 2 s once the window was active."""
+    api = api or user32
+    with _focus_lock:
+        prev = api.GetForegroundWindow()
+        taken = prev != win.hwnd
+        try:
+            if taken:
+                _foreground(api, win.hwnd)
+                sleep(settle)
+            yield
+        finally:
+            if taken and prev and api.IsWindow(prev):
+                _foreground(api, prev)
 
 
 def restore_if_minimized(win: GameWindow, api=None, sleep=time.sleep) -> bool:

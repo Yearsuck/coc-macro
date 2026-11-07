@@ -20,6 +20,10 @@ STORAGE_READ_GAP = 0.4   # seconds between the readings of the storage bars
 MAX_SPEND_ROUNDS = 10    # upgrade routines run back to back before an attack
 FAIL_WAIT_S = 30         # pause after an upgrade routine that did nothing, before trying again
 UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before giving up
+RELOAD_WAIT_S = 300      # seconds to wait for the village after reloading (it can open a live replay of an attack, ~3 min)
+RELOAD_TRIES = 3         # presses of VOLVER A CARGAR before giving up
+RELOAD_PRESS_WAIT_S = 20  # seconds to see the dialog go away after a press
+RELOAD_SETTLE_S = 2      # extra seconds once the village is back
 
 
 class Game(Protocol):
@@ -29,6 +33,8 @@ class Game(Protocol):
     def read_damage(self) -> int | None: ...
     def read_time_left(self) -> int | None: ...  # battle clock, seconds
     def play_deployment(self) -> bool: ...
+    def reload_if_disconnected(self) -> bool: ...  # inactivity dialog: press it, True if pressed
+    def inactivity_dialog(self) -> bool: ...       # optional: is that dialog still on screen
 
 
 class _Abort(Exception):
@@ -93,6 +99,50 @@ class Bot:
             return True
         return False
 
+    def _reload_if_disconnected(self) -> bool:
+        """Inactivity dialog: press 'VOLVER A CARGAR' and wait for the village to return. True if pressed."""
+        if self.dry_run:
+            return False
+        fn = getattr(self.game, "reload_if_disconnected", None)
+        if not fn:
+            return False
+        try:
+            pressed = fn()
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"No pude comprobar la sesion: {e}")
+            return False
+        if not pressed:
+            return False
+        self.log("Sesion desconectada por inactividad: recargo")
+        # The village is visible behind the dialog, so "home" alone proves nothing: first the dialog must go.
+        # If it stays the press was not taken: press again.
+        still_up = getattr(self.game, "inactivity_dialog", None)
+        if still_up:
+            for attempt in range(RELOAD_TRIES):
+                for _ in range(max(1, int(RELOAD_PRESS_WAIT_S / POLL))):
+                    self._check()
+                    if not still_up():
+                        break
+                    self.sleep(POLL)
+                else:
+                    if attempt + 1 >= RELOAD_TRIES:
+                        raise _Abort("La sesion no se recargo: el aviso sigue ahi")
+                    self.log("El aviso sigue: pulso otra vez")
+                    fn()
+                    continue
+                break
+        for _ in range(max(1, int(RELOAD_WAIT_S / POLL))):
+            self._check()
+            if self.game.screen_is("home"):
+                break
+            self.sleep(POLL)
+        else:
+            raise _Abort("La aldea no cargo tras recargar")
+        self._nap(RELOAD_SETTLE_S)
+        return True
+
     def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None,
               popups: bool = False) -> None:
         for i in range(max(1, int(self.timeout_s / POLL))):
@@ -150,6 +200,7 @@ class Bot:
         clicks, leaving the village on screen: if after a few seconds it is still the village, press them again
         (at most 3 times). Still loading a village (not the village, not scouting yet) is NOT retried."""
         for attempt in range(SEARCH_TRIES):
+            self._reload_if_disconnected()
             for name in ("battle", "find", "attack"):
                 self._click(name)
                 self.sleep(self.step_delay)
@@ -160,6 +211,9 @@ class Bot:
                     return
                 if self._dismiss_popup():
                     noticed = True            # it swallowed the presses: press them again right away
+                    break
+                if self._reload_if_disconnected():
+                    noticed = True
                     break
                 self.sleep(POLL)
             if not noticed and not self.game.screen_is("home"):
@@ -344,8 +398,10 @@ class Bot:
         """No attacks while gold and elixir are full; in a mode, spend a free slot meanwhile."""
         if self.dry_run or not (self.cfg.stop_when_full or self.cfg.mode != "none"):
             return
+        self._reload_if_disconnected()
         announced = False
         while self._storages_full():
+            self._reload_if_disconnected()
             self._check()
             if not announced:
                 self.log("Depositos llenos: espero")
@@ -373,6 +429,7 @@ class Bot:
     def run(self) -> None:
         while not self.stop.is_set():
             try:
+                self._reload_if_disconnected()
                 if not self.dry_run:
                     self._close_leftover_menu()      # so the storage bars are readable
                 self.spend_free_slots()              # counters to 0 before attacking (the first attack too)
