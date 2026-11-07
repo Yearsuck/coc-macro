@@ -133,7 +133,7 @@ def test_dry_run_never_clicks():
 
 
 def test_surrenders_when_time_runs_low():
-    g = FakeGame([GOOD, GOOD], damages=[10, 20], times=[170, 139])
+    g = FakeGame([GOOD, GOOD], damages=[10] * 30, times=[170] * 20 + [139] * 10)
     bot, logs, _ = make(g)
     assert bot.run_once() is True
     assert g.clicks == ["battle", "find", "attack", "surrender", "ok", "back"]
@@ -458,3 +458,104 @@ def test_no_reload_press_in_dry_run_full_cycle():
     assert bot.run_once() is True
     assert g.reload_calls == 0
     assert "reload_inactive" not in g.clicks
+
+
+class LostPressGame(FakeGame):
+    """The first `lose` presses of Rendirse are ignored (the game was busy)."""
+
+    def __init__(self, lose=1, **kw):
+        super().__init__(**kw)
+        self.lose, self.surrenders = lose, 0
+
+    def click_button(self, name):
+        if name == "surrender":
+            self.surrenders += 1
+            self.clicks.append(name)
+            if self.surrenders > self.lose:
+                self.screen = "confirm"
+            return
+        super().click_button(name)
+
+
+def test_a_lost_press_of_rendirse_is_pressed_again():
+    g = LostPressGame(lose=1, reads=[GOOD, GOOD], damages=[60])
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.surrenders == 2 and g.clicks[-3:] == ["surrender", "ok", "back"]
+    assert any("pulso Rendirse otra vez" in m for m in logs)
+
+
+def test_the_surrender_gives_up_after_the_tries():
+    from cocmacro.bot import SURRENDER_TRIES
+    g = LostPressGame(lose=99, reads=[GOOD, GOOD], damages=[60])
+    bot, logs, _ = make(g)
+    assert bot.run_once() is False
+    assert g.surrenders == SURRENDER_TRIES
+    assert any("confirmar rendicion" in m for m in logs)
+
+
+def test_if_the_battle_ends_while_surrendering_the_bot_just_goes_back():
+    g = LostPressGame(lose=99, reads=[GOOD, GOOD], damages=[60])
+    real = g.screen_is
+    polls = []
+
+    def screen_is(name):
+        polls.append(name)
+        if name == "results" and polls.count("results") > 3:       # the battle runs out during the confirmation wait
+            g.screen = "results"
+        return real(name)
+    g.screen_is = screen_is
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks[-1] == "back" and g.surrenders == 1
+
+
+def test_the_clock_rule_waits_for_the_end_of_the_deployment_plus_a_grace_time():
+    from cocmacro.bot import TIME_RULE_GRACE_POLLS
+    g = FakeGame([GOOD, GOOD], damages=[10] * 60, times=[100] * 60)       # clock already below the rule at the start
+    bot, _, _ = make(g)
+    assert bot.run_once() is True
+    consumed = 60 - len(g.times)
+    assert consumed >= TIME_RULE_GRACE_POLLS                             # it did not surrender on the first look
+    assert g.clicks[-3:] == ["surrender", "ok", "back"]
+
+
+def test_the_percent_rule_is_not_delayed_by_the_grace_time():
+    g = FakeGame([GOOD, GOOD], damages=[60], times=[100])
+    bot, _, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks[-3:] == ["surrender", "ok", "back"] and g.damages == []
+
+
+def test_a_bot_that_starts_on_the_results_screen_presses_volver():
+    g = FakeGame([GOOD, GOOD], damages=[60])
+    g.screen = "results"
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks[0] == "back" and g.clicks.count("back") >= 2         # first press at once, then the new attack
+    assert any("pantalla de resultados" in m for m in logs)
+
+
+def test_volver_is_not_double_pressed_right_after_the_normal_press():
+    g = FakeGame([GOOD, GOOD], damages=[60])
+    bot, _, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks.count("back") == 1                                   # the wait for the village did not press it again
+
+
+def test_volver_is_pressed_again_if_the_first_press_is_lost():
+    class StubbornResults(FakeGame):
+        def __init__(self):
+            super().__init__([])
+            self.screen, self.backs = "results", 0
+
+        def click_button(self, name):
+            self.clicks.append(name)
+            if name == "back":
+                self.backs += 1
+                if self.backs >= 3:
+                    self.screen = "home"
+    g = StubbornResults()
+    bot, _, _ = make(g, timeout_s=60)
+    bot._wait(lambda: g.screen_is("home"), "pantalla de inicio", "home", popups=True, results=True)
+    assert g.backs == 3
