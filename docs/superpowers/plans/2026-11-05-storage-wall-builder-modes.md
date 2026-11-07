@@ -25,7 +25,7 @@
 - Counter reads `0/7` mis-parsed as `07`/`7` => bot thinks a builder is free and clicks menus forever. Test: free=0 never triggers a routine; unreadable counter => treated as "none free".
 - Wall at max level 19 or no wall panel after click => routine ends, no infinite "add" loop. Test: loop bounded by `MAX_ADDS`.
 - Cost red never appears (very rich account) => `+10` spam. Test: `MAX_ADDS` cap then upgrade.
-- Filter popup left open / filter not applied (Héroe+Coste máx. remembered) => wrong item upgraded. Test: routine verifies `Permanente` and `Coste mín.` templates are selected before clicking first row; else abort.
+- Filter popup left open / filter not applied (`Héroe` (Hero) + `Coste máx.` (Max cost) remembered) => wrong item upgraded. Test: routine verifies `Permanente` (Permanent) and `Coste mín.` (Min cost) templates are selected before clicking first row; else abort.
 - Storages full and mode `none` + `stop_when_full` => bot idles without clicking, still stoppable by F8. Test with fake game.
 
 ---
@@ -82,7 +82,7 @@
 
 - [ ] **Step 1: Tests** with a scripted `FakeScreen` (records clicks, returns canned frames/`has`/`find`): `test_walls_adds_until_red_then_removes_one_then_upgrades_gold_then_elixir` (clicks order: spot, more, add10 x k, add1 x m, remove, up_gold, spot, more, …, remove, up_elixir); `test_walls_stops_when_no_wall_panel` (title unreadable => no add clicks, returns False); `test_walls_add_loop_capped_at_max_adds`; `test_busy_aborts_if_permanent_filter_not_selected` (no click on a list row); `test_busy_skips_when_first_row_cost_red`; `test_gem_confirm_aborts` (template `gem_cost` present => no confirm click).
 - [ ] **Step 2:** Run `python -m pytest tests/test_upgrades.py -v`; expect FAIL.
-- [ ] **Step 3: Implement.** Walls per spec "Rutina de muros". Busy: click `build`, click `filter`, click templates `filter_permanent` and `filter_cost_min` (found with `find`), verify both `has("filter_permanent_on")` / `has("filter_cost_min_on")`, close filter, find template `filtered_header` and click ~0.075 (relative y) below it for the first row, confirm button via template `confirm_upgrade`, close menu with `build_close`. One retry per step, then abort and return False.
+- [ ] **Step 3: Implement.** Walls per spec "Wall routine". Busy: click `build`, click `filter`, click templates `filter_permanent` and `filter_cost_min` (found with `find`), verify both `has("filter_permanent_on")` / `has("filter_cost_min_on")`, close filter, find template `filtered_header` and click ~0.075 (relative y) below it for the first row, confirm button via template `confirm_upgrade`, close menu with `build_close`. One retry per step, then abort and return False.
 - [ ] **Step 4:** Run; expect PASS.
 - [ ] **Step 5:** Commit `feat(upgrades): wall and cheapest-permanent upgrade routines`.
 
@@ -114,8 +114,8 @@
 
 **Files:** Modify `cocmacro/gui.py`, `cocmacro/viewmodel.py`; Test `tests/test_gui_smoke.py`, `tests/test_viewmodel.py`
 
-- [ ] **Step 1: Tests:** `test_mode_label_roundtrip` (`viewmodel.MODES` maps "Ninguno/Muros/Constructores ocupados" <-> `none/walls/busy`); smoke test that the window builds and `_read_cfg` stores `mode` and `stop_when_full`.
-- [ ] **Step 2-4:** fail, add a mode combobox and a "Parar con depositos llenos" checkbox to the rules card (`gui.py:193`), persist through `_read_cfg`/save, pass; full pytest.
+- [ ] **Step 1: Tests:** `test_mode_label_roundtrip` (`viewmodel.MODES` maps "Ninguno/Muros/Constructores ocupados" ("None/Walls/Busy builders") <-> `none/walls/busy`); smoke test that the window builds and `_read_cfg` stores `mode` and `stop_when_full`.
+- [ ] **Step 2-4:** fail, add a mode combobox and a `Parar con depósitos llenos` (Stop when storages full) checkbox to the rules card (`gui.py:193`), persist through `_read_cfg`/save, pass; full pytest.
 - [ ] **Step 5:** Commit `feat(gui): mode selector and stop-when-full checkbox`.
 
 ### Task 7: Calibration and live validation (done here, not delegated)
