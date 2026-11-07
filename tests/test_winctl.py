@@ -131,3 +131,62 @@ def test_find_game_window_and_list_game_windows(monkeypatch):
     assert winctl.find_game_window("yearsuckk") == winctl.GameWindow(20, 1920, 1080)
     with pytest.raises(winctl.AmbiguousWindow):
         winctl.find_game_window()
+
+
+def test_taps_of_two_windows_never_interleave(monkeypatch):
+    """The press and the release of a tap are one unit: another window's tap cannot land in between."""
+    import threading
+    import time
+    log, lock = [], threading.Lock()
+
+    def fake_post(win, kind, x, y):
+        with lock:
+            log.append((win.hwnd, kind))
+        time.sleep(0.01)
+    monkeypatch.setattr(winctl, "post_mouse", fake_post)
+    threads = [threading.Thread(target=lambda h=h: [winctl.click(winctl.GameWindow(h, 1, 1), 0.5, 0.5, hold_s=0.01)
+                                                    for _ in range(10)]) for h in (1, 2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    pairs = list(zip(log[0::2], log[1::2]))
+    assert len(log) == 40 and all(a[0] == b[0] and a[1] == "down" and b[1] == "up" for a, b in pairs)
+
+
+def test_exclusive_input_makes_the_second_holder_wait():
+    import threading
+    import time
+    order = []
+
+    def second():
+        with winctl.exclusive_input() as got:
+            order.append(("second", got))
+
+    with winctl.exclusive_input() as got:
+        assert got is True
+        t = threading.Thread(target=second)
+        t.start()
+        time.sleep(0.3)
+        assert order == []                      # still waiting while the first holds it
+        with winctl.exclusive_input() as again:   # re-entrant for the holder
+            assert again is True
+    t.join(2)
+    assert order == [("second", True)]
+
+
+def test_exclusive_input_gives_up_when_stop_is_set_while_waiting():
+    import threading
+    stop = threading.Event()
+    result = []
+
+    def waiter():
+        with winctl.exclusive_input(stop, poll=0.05) as got:
+            result.append(got)
+
+    with winctl.exclusive_input():
+        t = threading.Thread(target=waiter)
+        t.start()
+        stop.set()
+        t.join(2)
+    assert result == [False]
