@@ -223,3 +223,27 @@ def test_upgrade_busy_passes_the_hero_toggle_but_the_walls_surplus_does_not(tmp_
     g.upgrade("busy", lambda s: None, lambda: None)
     g.upgrade("surplus", lambda s: None, lambda: None)
     assert calls[0].get("heroes") is True and "heroes" not in calls[1]
+
+
+def test_reload_if_disconnected_clicks_when_template_present(tmp_path, monkeypatch):
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: name == "reload_inactive")
+    assert g.reload_if_disconnected() is True
+    assert clicks == [(0.355, 0.571)]
+
+
+def test_reload_if_disconnected_does_nothing_when_absent(tmp_path, monkeypatch):
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: False)
+    assert g.reload_if_disconnected() is False
+    assert clicks == []
+
+
+def test_reload_if_disconnected_ignores_other_dialogs_and_templates(tmp_path, monkeypatch):
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: name != "reload_inactive")
+    assert g.reload_if_disconnected() is False
+    assert clicks == []

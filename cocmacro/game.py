@@ -111,6 +111,15 @@ class RealGame:
         winctl.click(self.win, found[1][0], found[1][1])
         return True
 
+    def reload_if_disconnected(self) -> bool:
+        """Press VOLVER A CARGAR if the inactivity dialog is visible. True if pressed."""
+        frame = frames.grab(self.win)
+        if not self._has(frame, "reload_inactive"):
+            return False
+        x, y = self.cfg.buttons["reload_inactive"]
+        winctl.click(self.win, x, y)
+        return True
+
     def click_button(self, name: str) -> None:
         x, y = self.cfg.buttons[name]
         winctl.click(self.win, x, y)

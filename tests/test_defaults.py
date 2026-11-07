@@ -51,3 +51,9 @@ def test_own_upgrade_region_is_never_overwritten(tmp_path):
 def test_the_forge_tab_is_never_a_button():
     """The user forbade touching the forge / hero-equipment tab: there is no button to press it."""
     assert not any("forge" in n or "equip" in n for n in defaults.BUTTONS)
+
+
+def test_reload_inactive_button_and_template_exist():
+    assert "reload_inactive" in defaults.BUTTONS
+    assert defaults.BUTTONS["reload_inactive"] == (0.355, 0.571)
+    assert (defaults.DIR / "reload_inactive.png").exists()
