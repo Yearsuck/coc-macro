@@ -49,7 +49,8 @@ def test_fresh_data_dir_has_one_tab(app):
     assert app.panels == [app.panel]
     assert app.nb.tab(app.panel, "text") == "Cuenta 1"
     assert str(app.btn_add.cget("state")) == "normal"
-    assert str(app.panel.btn_close.cget("state")) == "disabled" or not app.panel.btn_close.winfo_ismapped()
+    assert str(app.panel.btn_close.cget("state")) == "disabled"
+    assert not app.panel.btn_close.winfo_ismapped()
 
 
 def test_registry_with_two_accounts_builds_panels_in_order(tk_root, tmp_path, monkeypatch):
@@ -108,7 +109,7 @@ def test_add_account_copies_calibration_and_caps_at_max(app):
     assert len(app.panels) == 4
     assert not app.panel.q.empty()
     kind, msg = app.panel.q.get_nowait()
-    assert kind == "log" and "max accounts" in msg
+    assert kind == "log" and "maximo" in msg
 
 
 def test_close_account_behaviours(app, monkeypatch):
@@ -122,7 +123,8 @@ def test_close_account_behaviours(app, monkeypatch):
     app.close_account(p2)
     assert len(app.panels) == 2
 
-    # busy panel: refuses with showwarning, nothing changes
+    # busy panel: refuses with showwarning, nothing changes (a yes answer must not matter)
+    monkeypatch.setattr(gui.messagebox, "askyesno", lambda *a, **k: True)
     warning_called = []
     monkeypatch.setattr(gui.messagebox, "showwarning", lambda *a, **k: warning_called.append(a))
     p2.busy = True
@@ -394,3 +396,116 @@ def test_start_checks_the_window_of_its_own_tab(app, monkeypatch):
     panel.cfg.window_title = "Clash of Clans - Alguien"
     panel.start()
     assert seen["find_window"] == panel._find_window
+
+
+def test_a_new_tab_is_called_cuenta_n_until_a_window_is_chosen(app):
+    app.add_account()
+    assert app.nb.tab(app.panels[1], "text") == "Cuenta 2"
+
+
+def test_start_is_refused_when_several_windows_are_open_and_none_is_chosen(app, monkeypatch):
+    def ambiguous(title=""):
+        raise winctl.AmbiguousWindow("Hay varias ventanas de Clash of Clans: elige una")
+    monkeypatch.setattr(gui.winctl, "find_game_window", ambiguous)
+    calibrate_panel(app.panel)
+    app.panel.start()
+    logs = [v for k, v in list(app.panel.q.queue) if k == "log"]
+    assert any("elige una" in v for v in logs)
+    assert app.panel.bot is None and app.panel.mode != "running"
+
+
+def test_start_is_refused_when_the_chosen_window_is_gone(app, monkeypatch):
+    calibrate_panel(app.panel)
+    app.panel.cfg.window_title = "Clash of Clans - Se fue"        # the fixture's finder raises WindowNotFound
+    app.panel.start()
+    logs = [v for k, v in list(app.panel.q.queue) if k == "log"]
+    assert any("no game" in v for v in logs)
+    assert app.panel.bot is None and app.panel.mode != "running"
+
+
+def test_the_bot_of_a_tab_writes_its_debug_captures_in_its_own_folder(app, monkeypatch):
+    app.add_account()
+    p2 = app.panels[1]
+    calibrate_panel(p2)
+    seen = {}
+
+    class FakeGame:
+        def __init__(self, win, cfg, rec, stop, tpl_dir, debug_dir=None):
+            seen["debug_dir"] = debug_dir
+
+    class FakeBot:
+        attacks_done = 0
+
+        def __init__(self, *a, **k):
+            pass
+
+        def run_once(self):
+            return True
+
+        def run(self):
+            return None
+
+    class SyncThread:
+        def __init__(self, target, daemon=True):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(gui.game, "RealGame", FakeGame)
+    monkeypatch.setattr(gui.bot, "Bot", FakeBot)
+    monkeypatch.setattr(gui.threading, "Thread", SyncThread)
+    monkeypatch.setattr(gui.preflight, "check", lambda *a, **k: None)
+    monkeypatch.setattr(p2, "_find_window", lambda: GameWindow(77, 1296, 729))
+    p2.dry.set(True)
+    p2.start()
+    assert seen["debug_dir"] == gui.DATA / "debug" / "2"
+
+
+def test_a_recording_keeps_its_exclusivity_when_another_job_of_the_tab_ends(app, monkeypatch):
+    """'Leer ahora' finishing while a deployment is being recorded must not free the other tabs."""
+    app.add_account()
+    p1, p2 = app.panels
+    assert app.try_exclusive(p1) is True
+    p1.recorder = object()                                  # recording in progress
+    p1.q.put(("done", None))
+    p1._poll()
+    assert app.exclusive is p1
+    assert app.try_exclusive(p2) is False
+    p1.recorder = None
+    p1.q.put(("done", None))
+    p1._poll()
+    assert app.exclusive is None
+
+
+def test_a_recorder_that_fails_to_start_does_not_leave_the_tabs_blocked(app, monkeypatch):
+    calibrate_panel(app.panel)
+    monkeypatch.setattr(app.panel, "_find_window", lambda: GameWindow(5, 1296, 729))
+    monkeypatch.setattr(gui.simpledialog, "askstring", lambda *a, **k: "nuevo")
+
+    def boom(win, name):
+        raise RuntimeError("no mouse hook")
+    monkeypatch.setattr(gui.recorder.Recorder, "for_window", staticmethod(boom))
+    app.panel.toggle_record()
+    assert app.exclusive is None and app.panel.recorder is None
+    logs = [v for k, v in list(app.panel.q.queue) if k == "log"]
+    assert any("No pude empezar a grabar" in v for v in logs)
+
+
+def test_claim_and_release_are_safe_from_several_threads(app):
+    import threading
+    app.add_account()
+    p1, p2 = app.panels
+    results = []
+
+    def claim(panel):
+        results.append(app.claim_window(panel, 99))
+    threads = [threading.Thread(target=claim, args=(p,)) for p in (p1, p2) * 20]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results.count(True) == len(results) - results.count(False)
+    owner = app._owned[99]
+    winners = {p for p in (p1, p2) if app.window_in_use_by_other(p, 99) is False}
+    assert winners == {owner}                              # exactly one tab owns it

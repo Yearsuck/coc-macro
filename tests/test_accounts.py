@@ -6,7 +6,9 @@ from cocmacro import accounts, config
 
 def test_valid_file_name():
     assert accounts.valid_file_name("config.json") is True
-    assert accounts.valid_file_name("config_1.json") is True
+    assert accounts.valid_file_name("config_1.json") is False      # would collide with config.json (index 1)
+    assert accounts.valid_file_name("config_01.json") is False
+    assert accounts.valid_file_name("config_02.json") is False
     assert accounts.valid_file_name("config_2.json") is True
     assert accounts.valid_file_name("config_10.json") is True
 
@@ -187,3 +189,18 @@ def test_account_name_from_title():
 def test_debug_dir(tmp_path):
     assert accounts.debug_dir(tmp_path, "config.json") == tmp_path / "debug" / "1"
     assert accounts.debug_dir(tmp_path, "config_3.json") == tmp_path / "debug" / "3"
+
+
+def test_saving_over_a_corrupt_registry_keeps_a_copy(tmp_path):
+    """A corrupt accounts.json reads as just config.json; the next save must not destroy what was there."""
+    (tmp_path / accounts.REGISTRY_FILE).write_text("{not json", encoding="utf-8")
+    assert accounts.load_registry(tmp_path) == ["config.json"]
+    accounts.save_registry(tmp_path, ["config.json", "config_2.json"])
+    assert (tmp_path / (accounts.REGISTRY_FILE + ".bad")).read_text(encoding="utf-8") == "{not json"
+    assert accounts.load_registry(tmp_path) == ["config.json", "config_2.json"]
+
+
+def test_saving_over_a_good_registry_makes_no_backup(tmp_path):
+    accounts.save_registry(tmp_path, ["config.json", "config_2.json"])
+    accounts.save_registry(tmp_path, ["config.json"])
+    assert not (tmp_path / (accounts.REGISTRY_FILE + ".bad")).exists()
