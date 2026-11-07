@@ -31,6 +31,10 @@ class WindowNotFound(Exception):
     pass
 
 
+class AmbiguousWindow(WindowNotFound):
+    pass
+
+
 class WindowMinimized(Exception):
     pass
 
@@ -38,6 +42,14 @@ class WindowMinimized(Exception):
 @dataclass(frozen=True)
 class GameWindow:
     hwnd: int
+    client_w: int
+    client_h: int
+
+
+@dataclass(frozen=True)
+class WindowInfo:
+    hwnd: int
+    title: str
     client_w: int
     client_h: int
 
@@ -70,21 +82,54 @@ def _client_size(hwnd) -> tuple[int, int]:
     return r.right, r.bottom
 
 
-def find_game_window() -> GameWindow:
-    found: list[int] = []
+def _enum_game_windows() -> list[WindowInfo]:
+    found: list[WindowInfo] = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def cb(hwnd, _):
         if user32.IsWindowVisible(hwnd) and _title(hwnd).startswith(TITLE_PREFIX) \
                 and _process_name(hwnd).startswith(PROCESS_NAME):
-            found.append(hwnd)
+            w, h = _client_size(hwnd)
+            found.append(WindowInfo(hwnd, _title(hwnd), w, h))
         return True
 
     user32.EnumWindows(cb, 0)
-    if not found:
-        raise WindowNotFound("Ventana de Clash of Clans no encontrada")
-    w, h = _client_size(found[0])
-    return GameWindow(found[0], w, h)
+    return found
+
+
+def list_game_windows() -> list[WindowInfo]:
+    return _enum_game_windows()
+
+
+def pick_window(windows: list[WindowInfo], title: str = "") -> WindowInfo:
+    """Select a game window by title, or the single open window when title is blank."""
+    clean = title.strip()
+    if not clean:
+        if len(windows) == 1:
+            return windows[0]
+        if not windows:
+            raise WindowNotFound("Ventana de Clash of Clans no encontrada")
+        raise AmbiguousWindow("Hay varias ventanas de Clash of Clans: elige una")
+
+    # Exact match beats a partial/prefix substring match
+    exact = [w for w in windows if w.title == title or w.title == clean]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise AmbiguousWindow(f"Hay varias ventanas de Clash of Clans con el titulo '{title}'")
+
+    needle = clean.lower()
+    matches = [w for w in windows if needle in w.title.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise AmbiguousWindow(f"Hay varias ventanas de Clash of Clans que coinciden con '{title}'")
+    raise WindowNotFound(f"Ventana de Clash of Clans no encontrada: '{title}'")
+
+
+def find_game_window(title: str = "") -> GameWindow:
+    w = pick_window(list_game_windows(), title)
+    return GameWindow(w.hwnd, w.client_w, w.client_h)
 
 
 def is_foreground(win: GameWindow) -> bool:
