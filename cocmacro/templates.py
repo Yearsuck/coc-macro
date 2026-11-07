@@ -55,6 +55,23 @@ def threshold_for(name: str) -> float:
     return STRICT if name in STRICT_NAMES else THRESHOLD
 
 
-def match(frame: np.ndarray, name: str, dir: Path, threshold: float | None = None) -> bool:
+# A screen the game draws in more than one way: it is there if ANY of the listed sets is fully matched. The
+# 'Mejorar tu ...' window shrinks its title text to fit long names ('Conjunto de explosivos'), so the title
+# crop alone misses it (live: score 0.47, the bot logged 'No aparece la ventana de mejora' while it was open);
+# its red X and the 'Confirmar' label of the green button never change. Those two are generic (every dialog has
+# a red X), so they only count at the spot where this window draws them (relative centre, +-POS_TOL).
+POS_TOL = 0.05
+ALTERNATIVES = {"upgrade_window": ((("upgrade_window", None),),
+                                   (("upgrade_window_x", (0.883, 0.077)), ("upgrade_window_confirm", (0.700, 0.833))))}
+
+
+def _match_one(frame: np.ndarray, name: str, dir: Path, threshold: float | None, at=None) -> bool:
     found = score(frame, name, dir)
-    return found is not None and found[0] >= (threshold if threshold is not None else threshold_for(name))
+    if found is None or found[0] < (threshold if threshold is not None else threshold_for(name)):
+        return False
+    return at is None or (abs(found[1][0] - at[0]) <= POS_TOL and abs(found[1][1] - at[1]) <= POS_TOL)
+
+
+def match(frame: np.ndarray, name: str, dir: Path, threshold: float | None = None) -> bool:
+    sets = ALTERNATIVES.get(name, (((name, None),),))
+    return any(all(_match_one(frame, n, dir, threshold, at) for n, at in parts) for parts in sets)
