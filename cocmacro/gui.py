@@ -6,7 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
-from cocmacro import (__version__, bot, calibrate, config, defaults, frames, game, hotkeys, ocr, overlay, paths,
+from cocmacro import (accounts, __version__, bot, calibrate, config, defaults, frames, game, hotkeys, ocr, overlay, paths,
                       preflight, recorder, theme, updater, viewmodel as vm, winctl)
 from cocmacro.config import format_mmss, parse_mmss
 from cocmacro.theme import BG, BORDER, CARD, DIM, GOLD, MUTED, PINK, TEXT
@@ -20,18 +20,19 @@ WIDTH = 880
 REFRESH_EVERY = 40          # polls (about 2 s) between status refreshes
 
 
-class App:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        root.title(f"CoC Macro v{__version__}")
-        root.configure(bg=BG)
-        root.minsize(WIDTH, 0)
-        root.resizable(False, True)
-        theme.apply_ttk_style(root)
-        self.cfg = config.load(CFG_PATH)
+class AccountPanel(tk.Frame):
+    """All per-account state and UI: one panel == one account / one Clash window."""
+
+    def __init__(self, parent, app, cfg_path: Path, index: int = 1):
+        super().__init__(parent, bg=BG)
+        self.app = app
+        self.root = app.root
+        self.cfg_path = cfg_path
+        self.index = index
+        self.cfg = config.load(self.cfg_path)
         if defaults.apply(self.cfg, TPL_DIR):
             DATA.mkdir(parents=True, exist_ok=True)
-            config.save(self.cfg, CFG_PATH)
+            config.save(self.cfg, self.cfg_path)
         self.q: queue.Queue = queue.Queue()
         self.stop_ev = threading.Event()
         self.bot: bot.Bot | None = None
@@ -43,20 +44,14 @@ class App:
         self._build()
         self.refresh_recordings()
         self.refresh_state()
-        self.unregister = hotkeys.start(lambda: self.q.put(("stop", None)),
-                                        lambda: self.q.put(("end_record", None)))
-        root.protocol("WM_DELETE_WINDOW", self.close)
-        if getattr(sys, "frozen", False):
-            updater.cleanup_old(Path(sys.executable))
-        if self.cfg.auto_check_updates:
-            threading.Thread(target=self._check_update, args=(False,), daemon=True).start()
         self._after_id = self.root.after(50, self._poll)
 
     # -- layout --------------------------------------------------------
     def _build(self):
         pad = {"padx": 24}
-        self._header().pack(fill="x", pady=(20, 0), **pad)
-        body = tk.Frame(self.root, bg=BG)
+        self._selector_row().pack(fill="x", pady=(16, 0), **pad)
+        self._header().pack(fill="x", pady=(12, 0), **pad)
+        body = tk.Frame(self, bg=BG)
         body.pack(fill="x", pady=(16, 0), **pad)
         body.columnconfigure(0, weight=1)
         self.left = tk.Frame(body, bg=BG)
@@ -65,14 +60,25 @@ class App:
         self._setup_card(self.left)
         self._reading_card(self.left)
         self._rules_card(body).grid(row=0, column=1, sticky="nsew", padx=(16, 0))
-        self.prep = self._prep_card(self.root)
+        self.prep = self._prep_card(self)
         self.prep.pack(fill="x", pady=(16, 0), **pad)
-        self.log_card = self._log_card(self.root)
+        self.log_card = self._log_card(self)
         self.log_card.pack(fill="both", expand=True, pady=(16, 0), **pad)
-        self._footer(self.root).pack(fill="x", pady=(10, 14), **pad)
+        self._footer(self).pack(fill="x", pady=(10, 14), **pad)
+
+    def _selector_row(self) -> tk.Frame:
+        row = tk.Frame(self, bg=BG)
+        theme.label(row, "Ventana", 10, True, bg=BG).pack(side="left", padx=(0, 8))
+        self.win_combo = ttk.Combobox(row, state="readonly", width=36, style="Dark.TCombobox",
+                                      font=theme.font(10))
+        self.win_combo.pack(side="left", padx=(0, 8))
+        self.win_combo.bind("<<ComboboxSelected>>", self._on_window_selected)
+        self.btn_win_refresh = theme.button(row, "Actualizar", self.refresh_windows, "secondary", 9, padx=10, pady=2)
+        self.btn_win_refresh.pack(side="left")
+        return row
 
     def _header(self) -> tk.Frame:
-        f = tk.Frame(self.root, bg=BG)
+        f = tk.Frame(self, bg=BG)
         title = tk.Frame(f, bg=BG)
         title.pack(side="left")
         theme.label(title, "CoC Macro", 17, True, bg=BG).pack(side="left")
@@ -289,8 +295,13 @@ class App:
     def _footer(self, parent) -> tk.Frame:
         f = tk.Frame(parent, bg=BG)
         theme.label(f, "F8 para todo · F9 termina una grabación", 8, fg=MUTED, bg=BG).pack(side="left")
+        self.btn_close = theme.button(f, "Cerrar esta cuenta", lambda: self.app.close_account(self), "danger", 8, padx=10, pady=2)
+        if self.index != 1:
+            self.btn_close.pack(side="left", padx=(14, 0))
+        else:
+            theme.set_enabled(self.btn_close, False, "danger")
         theme.button(f, "Buscar actualizaciones", lambda: threading.Thread(
-            target=self._check_update, args=(True,), daemon=True).start(), "secondary", 8, padx=10, pady=2
+            target=self.app.check_update, args=(True,), daemon=True).start(), "secondary", 8, padx=10, pady=2
         ).pack(side="right")
         self.auto_upd = tk.BooleanVar(value=self.cfg.auto_check_updates)
         tk.Checkbutton(f, text="Buscar actualizaciones al abrir", variable=self.auto_upd, bg=BG, fg=MUTED,
@@ -298,14 +309,55 @@ class App:
                        highlightthickness=0, bd=0).pack(side="right", padx=(0, 14))
         return f
 
+    def _find_window(self) -> winctl.GameWindow:
+        return winctl.find_game_window(self.cfg.window_title)
+
+    def refresh_windows(self):
+        windows = winctl.list_game_windows()
+        items = []
+        for w in windows:
+            in_use = self.app.window_in_use_by_other(self, w.hwnd)
+            items.append(f"{w.title} (en uso)" if in_use else w.title)
+        self.win_combo["values"] = items
+        target = self.cfg.window_title
+        match = ""
+        for item in items:
+            clean = item[:-len(" (en uso)")] if item.endswith(" (en uso)") else item
+            if clean == target:
+                match = item
+                break
+        self.win_combo.set(match)
+
+    def _on_window_selected(self, event=None):
+        raw = self.win_combo.get()
+        is_in_use = raw.endswith(" (en uso)")
+        title = raw[:-len(" (en uso)")] if is_in_use else raw
+        if is_in_use:
+            self.log("La ventana ya la usa otra cuenta")
+            self.refresh_windows()
+            return
+        windows = winctl.list_game_windows()
+        for w in windows:
+            if w.title == title and self.app.window_in_use_by_other(self, w.hwnd):
+                self.log("La ventana ya la usa otra cuenta")
+                self.refresh_windows()
+                return
+        self.cfg.window_title = title
+        self.cfg.account_name = accounts.account_name_from_title(title, f"Cuenta {self.index}")
+        DATA.mkdir(parents=True, exist_ok=True)
+        config.save(self.cfg, self.cfg_path)
+        self.app.update_tab_title(self)
+        self.refresh_state()
+
     # -- state ---------------------------------------------------------
     def refresh_state(self):
         """Recompute chips, mode and which cards are visible from the config and the game window."""
+        self.refresh_windows()
         self.missing = preflight.calibration_missing(self.cfg, TPL_DIR)
         names = recorder.list_recordings(REC_DIR)
         dep_ok = self.cfg.deployment in names
         try:
-            w = winctl.find_game_window()
+            w = self._find_window()
             game_size = (w.client_w, w.client_h)
         except winctl.WindowNotFound:
             game_size = None
@@ -320,6 +372,7 @@ class App:
     def _apply_mode(self, dep_ok: bool):
         running = self.mode in ("running", "stopping")
         setup = self.mode == "setup"
+        blocked_by_exclusive = (self.app.exclusive is not None and self.app.exclusive is not self)
         for w in (self.state, self.setup, self.reading):
             w.pack_forget()
         if setup:
@@ -327,7 +380,7 @@ class App:
             steps = vm.setup_steps(self.missing, dep_ok)
             self.setup_title.configure(text=vm.state_title("setup", None, sum(not s["done"] for s in steps)))
             for (row, num, t, h, b), s in zip(self.setup_rows, steps):
-                active = s["active"]
+                active = s["active"] and not blocked_by_exclusive
                 num.configure(text="✓" if s["done"] else str(s["n"]), bg=GOLD if active else (theme.OK if s["done"] else BORDER),
                               fg=BG if (active or s["done"]) else MUTED)
                 t.configure(text=s["title"], fg=TEXT if (active or s["done"]) else MUTED)
@@ -345,7 +398,7 @@ class App:
                 self._paint_stepper()
             else:
                 self.stepper.pack_forget()
-            theme.set_enabled(self.btn_start, not running, "primary")
+            theme.set_enabled(self.btn_start, (not running) and (not blocked_by_exclusive), "primary")
             theme.set_enabled(self.btn_stop, running, "danger")
             self.dry_chk.configure(state="disabled" if running else "normal")
             self.hint_lbl.configure(text="Empieza desde tu pueblo: Batalla, Buscar batalla, Atacar. Si la aldea no cumple "
@@ -361,9 +414,14 @@ class App:
             e.configure(state="disabled" if locked else "normal")
         self.combo.configure(state="disabled" if locked else "readonly")
         self.mode_combo.configure(state="disabled" if locked else "readonly")
+        self.win_combo.configure(state="disabled" if locked else "readonly")
+        theme.set_enabled(self.btn_win_refresh, not locked, "secondary")
         self.full_chk.configure(state="disabled" if locked else "normal")
         self.hero_chk.configure(state="disabled" if locked else "normal")
         self.rules_caption.configure(text="REGLAS (BLOQUEADAS MIENTRAS ATACA)" if locked else "REGLAS")
+        theme.set_enabled(self.btn_cal, not blocked_by_exclusive, "secondary")
+        theme.set_enabled(self.btn_cal_timer, not blocked_by_exclusive, "secondary")
+        theme.set_enabled(self.btn_rec, not blocked_by_exclusive, "secondary")
 
     def _fit(self):
         """Width is fixed; the height follows what the current mode shows."""
@@ -421,16 +479,21 @@ class App:
                     self.busy = False
                     if self.mode in ("running", "stopping"):
                         self.mode, self.phase = "idle", None
+                    self.app.release_window(self)
+                    if self.recorder is None:        # a recording keeps its exclusivity until it ends
+                        self.app.release_exclusive(self)
                     self.refresh_state()
+                elif kind == "refresh_all":
+                    self.app._refresh_all()
                 elif kind == "phase":
                     self.phase = val
                     self._apply_mode(self.cfg.deployment in recorder.list_recordings(REC_DIR))
                 elif kind == "reading":
                     self._show_reading(val)
                 elif kind == "update":
-                    self._offer_update(*val)
+                    self.app.offer_update(*val)
                 elif kind == "quit":
-                    self.close()
+                    self.app.close()
                 elif kind.startswith("ov_"):
                     self._overlay_event(kind, val)
         except queue.Empty:
@@ -468,7 +531,7 @@ class App:
         self.cfg.prioritize_heroes = self.hero_var.get()
         self.cfg.auto_check_updates = self.auto_upd.get()
         DATA.mkdir(exist_ok=True)
-        config.save(self.cfg, CFG_PATH)
+        config.save(self.cfg, self.cfg_path)
         return True
 
     def _worker(self, fn):
@@ -491,19 +554,35 @@ class App:
     def start(self):
         if self.busy or not self._read_cfg():
             return
+        if self.app.exclusive is not None and self.app.exclusive is not self:
+            return
         dry = self.dry.get()
-        err = preflight.check(self.cfg, TPL_DIR, REC_DIR, dry)
+        err = preflight.check(self.cfg, TPL_DIR, REC_DIR, dry, find_window=self._find_window)
         if err:
             self.log(err)
+            return
+        try:
+            self._find_window()
+        except winctl.WindowNotFound as e:
+            self.log(str(e))
             return
         self.mode, self.phase = "running", None
         self._show_reading({})
         self.refresh_state()
 
         def job():
-            win = winctl.find_game_window()
+            try:
+                win = self._find_window()
+            except winctl.WindowNotFound as e:
+                self.log(str(e))
+                return
+            if not self.app.claim_window(self, win.hwnd):
+                self.log("La ventana ya la usa otra cuenta")
+                return
+            self.q.put(("refresh_all", None))          # the other tabs show this window as (en uso)
             rec = None if dry else recorder.load_recording(self.cfg.deployment, REC_DIR)
-            g = game.RealGame(win, self.cfg, rec, self.stop_ev, TPL_DIR, debug_dir=DATA / "debug")
+            g = game.RealGame(win, self.cfg, rec, self.stop_ev, TPL_DIR,
+                              debug_dir=accounts.debug_dir(DATA, self.cfg_path.name))
             self.bot = bot.Bot(g, self.cfg, self.log, self.stop_ev, dry_run=dry,
                                on_phase=lambda p: self.q.put(("phase", p)),
                                on_reading=lambda r: self.q.put(("reading", r)))
@@ -524,28 +603,40 @@ class App:
 
     def toggle_record(self):
         if self.recorder is None:
+            if not self.app.try_exclusive(self):
+                self.log("Para los demas bots antes de calibrar o grabar")
+                return
             try:
-                win = winctl.find_game_window()
+                win = self._find_window()
             except winctl.WindowNotFound as e:
+                self.app.release_exclusive(self)
                 self.log(str(e))
                 return
             name = simpledialog.askstring("Grabar despliegue", "Nombre del despliegue:", parent=self.root)
             if not name:
+                self.app.release_exclusive(self)
                 return
-            self.recorder = recorder.Recorder.for_window(win, name.strip())
-            self.recorder.start()
+            try:
+                self.recorder = recorder.Recorder.for_window(win, name.strip())
+                self.recorder.start()
+            except Exception as e:
+                self.recorder = None
+                self.app.release_exclusive(self)
+                self.log(f"No pude empezar a grabar: {e}")
+                return
             self.btn_rec.configure(text="Terminar grabación (F9)")
             self.setup_rows[1][4].configure(text="Terminar grabación (F9)")
             self.log(f"Grabando '{name}': haz tu despliegue en el juego y pulsa F9")
         else:
             rec = self.recorder.stop()
             self.recorder = None
+            self.app.release_exclusive(self)
             self.btn_rec.configure(text="Grabar despliegue nuevo")
             self.setup_rows[1][4].configure(text="Grabar despliegue")
             if rec.events:
                 recorder.save_recording(rec, REC_DIR)
                 self.cfg.deployment = rec.name
-                config.save(self.cfg, CFG_PATH)
+                config.save(self.cfg, self.cfg_path)
                 self.refresh_recordings()
                 self.log(f"Guardado '{rec.name}' ({len(rec.events)} eventos)")
             else:
@@ -553,10 +644,13 @@ class App:
             self.refresh_state()
 
     def calibrate(self):
+        if not self.app.try_exclusive(self):
+            self.log("Para los demas bots antes de calibrar o grabar")
+            return
         steps = calibrate.STEPS
 
         def job():
-            win = winctl.find_game_window()
+            win = self._find_window()
             self.q.put(("ov_clear", None))
             for i, (name, kind, prompt) in enumerate(steps, 1):
                 if self.stop_ev.is_set():
@@ -571,8 +665,12 @@ class App:
         self._worker(job)
 
     def calibrate_timer(self):
+        if not self.app.try_exclusive(self):
+            self.log("Para los demas bots antes de calibrar o grabar")
+            return
+
         def job():
-            win = winctl.find_game_window()
+            win = self._find_window()
             prompt = "Entra en una batalla y arrastra un rectangulo sobre el reloj (ej. 2m 51s)"
             self.log(f"[timer] {prompt}")
             self._calibrate_step(win, "timer", "region", prompt)
@@ -600,12 +698,12 @@ class App:
             self.q.put(("ov_guide", None))
             self.q.put(("ov_saved", (name, self.cfg.regions[name])))
         DATA.mkdir(exist_ok=True)
-        config.save(self.cfg, CFG_PATH)
+        config.save(self.cfg, self.cfg_path)
 
     def _overlay_event(self, kind: str, val):
         try:
             if self.overlay is None:
-                self.overlay = overlay.Overlay(self.root)
+                self.overlay = overlay.Overlay(self.root, find_window=self._find_window)
             if kind == "ov_banner":
                 self.overlay.banner(*val) if isinstance(val, tuple) else self.overlay.banner(val)
             elif kind == "ov_guide":
@@ -625,7 +723,7 @@ class App:
 
     def read_now(self):
         def job():
-            win = winctl.find_game_window()
+            win = self._find_window()
             frame = frames.grab(win)
             vals = {k: ocr.read_number(frame, self.cfg.regions[k])
                     for k in ("gold", "elixir", "damage") if k in self.cfg.regions}
@@ -635,20 +733,184 @@ class App:
             self.log(f"Lectura: {vals} · reloj {left}")
         self._worker(job)
 
+    def dispose(self):
+        """Stop timers and the bot; leaves hotkeys and the Tk root alone."""
+        self.stop_ev.set()
+        if self.recorder:
+            try:
+                self.recorder.stop()
+            except Exception:
+                pass
+            self.recorder = None
+        if self._after_id:
+            self.root.after_cancel(self._after_id)
+        self.app.release_window(self)
+        self.app.release_exclusive(self)
+
+
+class App:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        root.title(f"CoC Macro v{__version__}")
+        root.configure(bg=BG)
+        root.minsize(WIDTH, 0)
+        root.resizable(False, True)
+        theme.apply_ttk_style(root)
+        self._apply_notebook_style(root)
+
+        self._owned: dict[int, AccountPanel] = {}
+        self._owned_lock = threading.Lock()
+        self.exclusive: AccountPanel | None = None
+
+        self.nb = ttk.Notebook(root, style="Dark.TNotebook")
+        self.nb.pack(fill="both", expand=True)
+
+        files = accounts.load_registry(DATA)
+        self.panels = []
+        for file in files:
+            if file == "config.json":
+                p = AccountPanel(self.nb, self, CFG_PATH, 1)
+            else:
+                p = AccountPanel(self.nb, self, DATA / file, accounts.account_index(file))
+            tab_title = p.cfg.account_name or f"Cuenta {p.index}"
+            self.nb.add(p, text=tab_title)
+            self.panels.append(p)
+        self.panel = self.panels[0]
+
+        ctrl_row = tk.Frame(root, bg=BG)
+        ctrl_row.pack(fill="x", padx=24, pady=(8, 10))
+        self.btn_add = theme.button(ctrl_row, "+ Añadir cuenta", self.add_account, "secondary", 9, padx=10, pady=4)
+        self.btn_add.pack(side="left")
+        self._update_btn_add()
+
+        self.unregister = hotkeys.start(self._hotkey_stop, self._hotkey_end_record)
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        if getattr(sys, "frozen", False):
+            updater.cleanup_old(Path(sys.executable))
+        if self.panel.cfg.auto_check_updates:
+            threading.Thread(target=self.check_update, args=(False,), daemon=True).start()
+
+    def _apply_notebook_style(self, root: tk.Tk):
+        st = ttk.Style(root)
+        st.configure("Dark.TNotebook", background=BG, borderwidth=0)
+        st.configure("Dark.TNotebook.Tab", background=CARD, foreground=MUTED, borderwidth=0,
+                     padding=[14, 6], font=theme.font(10))
+        st.map("Dark.TNotebook.Tab",
+               background=[("selected", BORDER), ("active", CARD)],
+               foreground=[("selected", TEXT), ("active", TEXT)])
+
+    def _update_btn_add(self):
+        can_add = len(self.panels) < accounts.MAX_ACCOUNTS
+        theme.set_enabled(self.btn_add, can_add, "secondary")
+
+    def _refresh_all(self):
+        for p in self.panels:
+            p.refresh_state()
+
+    def claim_window(self, panel: AccountPanel, hwnd: int) -> bool:
+        with self._owned_lock:             # bot threads race here when two tabs start at once
+            owner = self._owned.get(hwnd)
+            if owner is not None and owner is not panel:
+                return False
+            self._owned[hwnd] = panel      # no widgets here (bot thread): the job posts "refresh_all"
+            return True
+
+    def release_window(self, panel: AccountPanel) -> None:
+        with self._owned_lock:
+            hwnds = [h for h, p in self._owned.items() if p is panel]
+            for h in hwnds:
+                del self._owned[h]
+        if hwnds:
+            self._refresh_all()
+
+    def window_in_use_by_other(self, panel: AccountPanel, hwnd: int) -> bool:
+        with self._owned_lock:
+            owner = self._owned.get(hwnd)
+        return owner is not None and owner is not panel
+
+    def try_exclusive(self, panel: AccountPanel) -> bool:
+        if self.exclusive not in (None, panel):
+            return False
+        for p in self.panels:
+            if p is not panel and (p.busy or p.mode in ("running", "stopping")):
+                return False
+        if panel.busy or panel.mode in ("running", "stopping"):
+            return False
+        self.exclusive = panel
+        self._refresh_all()
+        return True
+
+    def release_exclusive(self, panel: AccountPanel) -> None:
+        if self.exclusive is panel:
+            self.exclusive = None
+            self._refresh_all()
+
+    def add_account(self):
+        if len(self.panels) >= accounts.MAX_ACCOUNTS:
+            self.panel.log(f"Ya hay el maximo de cuentas ({accounts.MAX_ACCOUNTS})")
+            return
+        try:
+            filename, cfg = accounts.add_account(DATA)
+        except (ValueError, OSError) as e:
+            self.panel.log(f"No se pudo anadir la cuenta: {e}")
+            return
+        idx = accounts.account_index(filename)
+        panel = AccountPanel(self.nb, self, DATA / filename, idx)
+        title = panel.cfg.account_name or f"Cuenta {panel.index}"
+        self.nb.add(panel, text=title)
+        self.panels.append(panel)
+        self.nb.select(panel)
+        self._update_btn_add()
+        panel._fit()
+
+    def close_account(self, panel: AccountPanel):
+        if panel.index == 1:
+            return
+        if panel.busy or panel.mode in ("running", "stopping"):
+            messagebox.showwarning("CoC Macro", "Para la cuenta antes de cerrarla")
+            return
+        title = panel.cfg.account_name or f"Cuenta {panel.index}"
+        if not messagebox.askyesno("Cerrar cuenta", f"¿Cerrar {title}?"):
+            return
+        panel.dispose()
+        accounts.remove_account(DATA, panel.cfg_path.name)
+        self.nb.forget(panel)
+        panel.destroy()
+        if panel in self.panels:
+            self.panels.remove(panel)
+        self._update_btn_add()
+
+    def update_tab_title(self, panel: AccountPanel):
+        title = panel.cfg.account_name or f"Cuenta {panel.index}"
+        try:
+            self.nb.tab(panel, text=title)
+        except Exception:
+            pass
+
+    # -- hotkeys (they run on the listener thread: only post to the Tk thread's queues) ----------
+    def _hotkey_stop(self):
+        for p in list(self.panels):
+            p.q.put(("stop", None))
+
+    def _hotkey_end_record(self):
+        for p in list(self.panels):
+            if p.recorder is not None:
+                p.q.put(("end_record", None))
+
     # -- updates -------------------------------------------------------
-    def _check_update(self, manual: bool):
+    def check_update(self, manual: bool):
         try:
             info = updater.check(__version__)
         except Exception as e:  # offline, rate limited...: only bother the user if they asked
             if manual:
-                self.log(f"No se pudo comprobar actualizaciones: {e}")
+                self.panel.log(f"No se pudo comprobar actualizaciones: {e}")
             return
         if info:
-            self.q.put(("update", (info, manual)))
+            self.panel.q.put(("update", (info, manual)))
         elif manual:
-            self.log(f"Estas al dia (v{__version__})")
+            self.panel.log(f"Estas al dia (v{__version__})")
 
-    def _offer_update(self, info: "updater.UpdateInfo", manual: bool):
+    def offer_update(self, info: "updater.UpdateInfo", manual: bool):
         if not messagebox.askyesno(
                 "Actualizacion",
                 f"Hay una version nueva: v{info.version} (tienes v{__version__}).\n\n"
@@ -656,10 +918,10 @@ class App:
                 "¿Instalarla ahora?"):
             return
         if not getattr(sys, "frozen", False):
-            self.log("Estas ejecutando desde el codigo: actualiza con git pull")
+            self.panel.log("Estas ejecutando desde el codigo: actualiza con git pull")
             return
-        if self.busy:
-            self.log("Para el bot antes de actualizar")
+        if any(p.busy for p in self.panels):
+            self.panel.log("Para el bot antes de actualizar")
             return
 
         def job():
@@ -670,20 +932,19 @@ class App:
             def progress(n):
                 if n - last[0] >= 10_000_000 or (info.size and n >= info.size):
                     last[0] = n
-                    self.log(f"Descargando... {n // 1_000_000} MB")
-            self.log(f"Descargando v{info.version}...")
+                    self.panel.log(f"Descargando... {n // 1_000_000} MB")
+            self.panel.log(f"Descargando v{info.version}...")
             updater.download(info, dest, progress=progress)
-            self.log("Hash correcto. Instalando y reiniciando...")
+            self.panel.log("Hash correcto. Instalando y reiniciando...")
             updater.apply_update(dest, exe)
-            self.q.put(("quit", None))
-        self._worker(job)
+            self.panel.q.put(("quit", None))
+        self.panel._worker(job)
 
     def dispose(self):
-        """Stop timers, hotkeys and the bot; leaves the Tk root alone (tests reuse one)."""
-        self.stop_ev.set()
+        """Stop timers, hotkeys and every panel; leaves the Tk root alone (tests reuse one)."""
+        for p in self.panels:
+            p.dispose()
         self.unregister()
-        if self._after_id:
-            self.root.after_cancel(self._after_id)
 
     def close(self):
         self.dispose()
