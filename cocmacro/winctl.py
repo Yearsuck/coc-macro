@@ -295,8 +295,9 @@ def capture(win: GameWindow) -> np.ndarray:
     return np.ascontiguousarray(img[oy:oy + ch, ox:ox + cw, :3])
 
 
-def post_mouse(win: GameWindow, kind: Literal["down", "up", "move"], x: float, y: float) -> None:
-    """Send a mouse event with relative (0-1) client coordinates."""
+def post_mouse(win: GameWindow, kind: Literal["down", "up", "move", "hover"], x: float, y: float) -> None:
+    """Send a mouse event with relative (0-1) client coordinates. 'move' is a drag step (left button held),
+    'hover' a plain pointer move."""
     if not user32.IsWindow(win.hwnd):
         raise WindowNotFound("La ventana del juego se cerro")
     cw, ch = _client_size(win.hwnd)
@@ -304,7 +305,8 @@ def post_mouse(win: GameWindow, kind: Literal["down", "up", "move"], x: float, y
     lparam = ((py & 0xFFFF) << 16) | (px & 0xFFFF)
     msg, wparam = {"down": (WM_LBUTTONDOWN, MK_LBUTTON),
                    "up": (WM_LBUTTONUP, 0),
-                   "move": (WM_MOUSEMOVE, MK_LBUTTON)}[kind]
+                   "move": (WM_MOUSEMOVE, MK_LBUTTON),
+                   "hover": (WM_MOUSEMOVE, 0)}[kind]
     user32.PostMessageW(win.hwnd, msg, wparam, lparam)
 
 
@@ -321,9 +323,24 @@ def post_wheel(win: GameWindow, x: float, y: float, delta: int) -> None:
         user32.PostMessageW(win.hwnd, WM_MOUSEWHEEL, wparam, lparam)
 
 
+HOVER_STEP = 0.004      # relative: about 4 px, the pointer jiggle before a tap
+
+
+def hover_to(win: GameWindow, x: float, y: float) -> None:
+    """Move the pointer to (x, y) the way a real mouse arrives: from a point next to it. The host forwards a press
+    only when the pointer position changed since its last event; taps repeated at the same spot were dropped
+    (live: 'Siguiente' pressed 12 times in a row kept showing the same village, and Volver was ignored until
+    other taps had moved the pointer)."""
+    post_mouse(win, "hover", min(1.0, x + HOVER_STEP), y)
+    time.sleep(0.02)
+    post_mouse(win, "hover", x, y)
+    time.sleep(0.02)
+
+
 def click(win: GameWindow, x: float, y: float, hold_s: float = 0.08) -> None:
     with _input_lock:                  # the press and the release of a tap must not be split by another window
         activate_instance(win)
+        hover_to(win, x, y)
         post_mouse(win, "down", x, y)
         time.sleep(hold_s)
         post_mouse(win, "up", x, y)
