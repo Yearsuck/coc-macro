@@ -23,6 +23,11 @@ UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before givi
 RELOAD_WAIT_S = 300      # seconds to wait for the village after reloading (it can open a live replay of an attack, ~3 min)
 RELOAD_TRIES = 3         # presses of VOLVER A CARGAR before giving up
 RELOAD_PRESS_WAIT_S = 20  # seconds to see the dialog go away after a press
+SURRENDER_TRIES = 3       # presses of Rendirse before giving up on the confirmation window
+CONFIRM_WAIT_S = 6        # seconds to see the confirmation window after pressing Rendirse
+TIME_RULE_GRACE_POLLS = 20  # the clock rule only counts after this many battle polls (>= 10 s: OCR slows each
+                            # poll) since the deployment ended; turns of the other account shift the clock
+BACK_EVERY_S = 4          # while on the results screen, press Volver again this often
 RELOAD_SETTLE_S = 2      # extra seconds once the village is back
 
 
@@ -144,13 +149,19 @@ class Bot:
         return True
 
     def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None,
-              popups: bool = False) -> None:
+              popups: bool = False, results: bool = False) -> None:
+        """Wait for `pred`. `popups` also closes a 'Vale' notice; `results` also presses Volver again every
+        BACK_EVERY_S while the results screen is up (the caller pressed it once already, or the first press was
+        lost, and the bot would wait for the village forever). Never at the first look: that would double-press."""
         for i in range(max(1, int(self.timeout_s / POLL))):
             self._check()
             if pred():
                 return
             if popups:
                 self._dismiss_popup()
+            if results and i and i % max(1, int(BACK_EVERY_S / POLL)) == 0 and self.game.screen_is("results"):
+                self.log("Estoy en la pantalla de resultados: pulso Volver")
+                self._click("back")
             if i and i % REPORT_EVERY == 0:
                 self.log(f"Sigo esperando: {what} ({i * POLL:.0f}s){self._why(screen)}")
             self.sleep(POLL)
@@ -235,7 +246,10 @@ class Bot:
             self.log(f"[simulacion] oro {gold} elixir {elixir}: {verdict}")
             return
         self._close_leftover_menu()
-        self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True)
+        if self.game.screen_is("results"):
+            self.log("Estoy en la pantalla de resultados: pulso Volver")
+            self._click("back")
+        self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True, results=True)
         self._phase("search")
         self._open_search()
         unreadable = 0
@@ -268,7 +282,8 @@ class Bot:
         self._phase("deploy")
         if not self.game.play_deployment():
             raise _Abort("Despliegue interrumpido")
-        blind = 0
+        blind, since_deploy = 0, 0
+        grace_polls = TIME_RULE_GRACE_POLLS
         for _ in range(max(1, int(self.battle_timeout_s / POLL))):
             self._check()
             if self.game.screen_is("results"):
@@ -284,15 +299,18 @@ class Bot:
             if blind == BLIND_POLLS:
                 self.log("No consigo leer el daño; guardo una captura en data/debug")
                 self._dump("damage")
-            if decisions.should_surrender(pct, self.cfg, left):
+            since_deploy += 1
+            # the clock rule counts from the end of the deployment: waiting for the other account's turn to deploy
+            # already used up part of the 3 minutes and must not make this one give up before its troops fight
+            rule_left = left if since_deploy >= grace_polls else None
+            if decisions.should_surrender(pct, self.cfg, rule_left):
                 if decisions.should_surrender(pct, self.cfg):
                     self.log(f"Rindiendose con {pct}%")
                 else:
                     self.log(f"Rindiendose por tiempo (quedan {left}s)")
                 self._phase("surrender")
-                self._click("surrender")
-                self._wait(lambda: self.game.screen_is("confirm"), "confirmar rendicion", "confirm")
-                self._click("ok")
+                if not self._surrender():
+                    break                          # the battle ended by itself while surrendering
                 self._wait(lambda: self.game.screen_is("results"), "pantalla de resultados", "results")
                 self._phase("back")
                 self._click("back")
@@ -300,7 +318,25 @@ class Bot:
             self.sleep(POLL)
         else:
             raise _Abort("Tiempo agotado esperando el final de la batalla")
-        self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home", popups=True)
+        self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home", popups=True, results=True)
+
+    def _surrender(self) -> bool:
+        """Press Rendirse and confirm. The press can be lost (the game was busy), so if the confirmation window
+        does not show within a few seconds it is pressed again (SURRENDER_TRIES times). False if the battle ended
+        on its own meanwhile (results screen), True once the confirmation was pressed."""
+        for attempt in range(SURRENDER_TRIES):
+            self._click("surrender")
+            for _ in range(max(1, int(CONFIRM_WAIT_S / POLL))):
+                self._check()
+                if self.game.screen_is("confirm"):
+                    self._click("ok")
+                    return True
+                if self.game.screen_is("results"):
+                    return False
+                self.sleep(POLL)
+            if attempt + 1 < SURRENDER_TRIES:
+                self.log("La rendicion no se confirmo: pulso Rendirse otra vez")
+        raise _Abort("Tiempo agotado esperando: confirmar rendicion")
 
     # -- modes: storages full / spend free builders ---------------------
     def _nap(self, seconds: float) -> None:

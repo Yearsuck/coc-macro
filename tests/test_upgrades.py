@@ -897,3 +897,20 @@ def test_allowed_row_gives_up_when_the_list_ends():
     scr = FakeScreen(find_templates={"skip_tiradora": (0.82, first[1] + NAME_DY)})
     assert _allowed_row(scr, first) is None                       # the next row would be on the tabs
     assert _allowed_row(FakeScreen(), first) == first
+
+
+def test_menu_opened_looks_a_few_times_before_giving_up():
+    from cocmacro.upgrades import _menu_opened
+    looks = iter([False, False, True])
+    scr = FakeScreen(has_templates={"menu_close_x": lambda: next(looks)})
+    pauses = []
+    assert _menu_opened(scr, pauses.append) is True
+    assert pauses == [0.5, 0.5]                          # it waited between the looks, not after the last one
+
+
+def test_menu_opened_says_no_after_every_look_failed():
+    from cocmacro.upgrades import _menu_opened
+    scr = FakeScreen(has_templates={"menu_close_x": False})
+    pauses = []
+    assert _menu_opened(scr, pauses.append, tries=4) is False
+    assert len(pauses) == 3

@@ -105,8 +105,9 @@ def test_taps_of_two_windows_never_interleave(monkeypatch):
         t.start()
     for t in threads:
         t.join()
-    pairs = list(zip(log[0::2], log[1::2]))
-    assert len(log) == 40 and all(a[0] == b[0] and a[1] == "down" and b[1] == "up" for a, b in pairs)
+    taps = [log[i:i + 4] for i in range(0, len(log), 4)]                   # hover, hover, down, up per tap
+    assert len(log) == 80 and all(len({h for h, _ in t}) == 1 and [k for _, k in t] == ["hover", "hover", "down", "up"]
+                                  for t in taps)
 
 
 def test_exclusive_input_makes_the_second_holder_wait():
@@ -226,7 +227,7 @@ def test_a_tap_marks_its_window_active_before_pressing(monkeypatch):
     monkeypatch.setattr(winctl, "activate_instance", lambda win: calls.append("activate"))
     monkeypatch.setattr(winctl, "post_mouse", lambda win, kind, x, y: calls.append(kind))
     winctl.click(winctl.GameWindow(1, 10, 10), 0.5, 0.5, hold_s=0)
-    assert calls == ["activate", "down", "up"]
+    assert calls == ["activate", "hover", "hover", "down", "up"]
 
 
 def test_activating_from_a_thread_while_the_main_thread_is_blocked_does_not_hang(monkeypatch):
@@ -238,3 +239,34 @@ def test_activating_from_a_thread_while_the_main_thread_is_blocked_does_not_hang
     t.start()
     t.join(20)
     assert not t.is_alive() and result == [False]
+
+
+def test_a_tap_arrives_like_a_real_mouse_from_a_point_next_to_the_target(monkeypatch):
+    seen = []
+    monkeypatch.setattr(winctl, "activate_instance", lambda win: None)
+    monkeypatch.setattr(winctl, "post_mouse", lambda win, kind, x, y: seen.append((kind, round(x, 3), round(y, 3))))
+    monkeypatch.setattr(winctl.time, "sleep", lambda s: None)
+    winctl.click(winctl.GameWindow(1, 10, 10), 0.5, 0.5)
+    assert seen[0] == ("hover", round(0.5 + winctl.HOVER_STEP, 3), 0.5)       # first a point next to it...
+    assert seen[1] == ("hover", 0.5, 0.5)                                      # ...then the target itself
+    assert seen[2:] == [("down", 0.5, 0.5), ("up", 0.5, 0.5)]
+
+
+def test_the_same_spot_tapped_twice_in_a_row_is_moved_onto_each_time(monkeypatch):
+    seen = []
+    monkeypatch.setattr(winctl, "activate_instance", lambda win: None)
+    monkeypatch.setattr(winctl, "post_mouse", lambda win, kind, x, y: seen.append(kind))
+    monkeypatch.setattr(winctl.time, "sleep", lambda s: None)
+    for _ in range(2):
+        winctl.click(winctl.GameWindow(1, 10, 10), 0.9, 0.75)
+    assert seen == ["hover", "hover", "down", "up"] * 2
+
+
+def test_a_hover_is_a_move_without_the_button_held(monkeypatch):
+    posted = []
+    monkeypatch.setattr(winctl, "_client_size", lambda hwnd: (100, 100))
+    monkeypatch.setattr(winctl.user32, "IsWindow", lambda h: 1)
+    monkeypatch.setattr(winctl.user32, "PostMessageW", lambda h, m, w, l: posted.append((m, w)))
+    winctl.post_mouse(winctl.GameWindow(1, 100, 100), "hover", 0.5, 0.5)
+    winctl.post_mouse(winctl.GameWindow(1, 100, 100), "move", 0.5, 0.5)
+    assert posted == [(winctl.WM_MOUSEMOVE, 0), (winctl.WM_MOUSEMOVE, winctl.MK_LBUTTON)]
