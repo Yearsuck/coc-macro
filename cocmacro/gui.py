@@ -480,7 +480,8 @@ class AccountPanel(tk.Frame):
                     if self.mode in ("running", "stopping"):
                         self.mode, self.phase = "idle", None
                     self.app.release_window(self)
-                    self.app.release_exclusive(self)
+                    if self.recorder is None:        # a recording keeps its exclusivity until it ends
+                        self.app.release_exclusive(self)
                     self.refresh_state()
                 elif kind == "refresh_all":
                     self.app._refresh_all()
@@ -615,8 +616,14 @@ class AccountPanel(tk.Frame):
             if not name:
                 self.app.release_exclusive(self)
                 return
-            self.recorder = recorder.Recorder.for_window(win, name.strip())
-            self.recorder.start()
+            try:
+                self.recorder = recorder.Recorder.for_window(win, name.strip())
+                self.recorder.start()
+            except Exception as e:
+                self.recorder = None
+                self.app.release_exclusive(self)
+                self.log(f"No pude empezar a grabar: {e}")
+                return
             self.btn_rec.configure(text="Terminar grabación (F9)")
             self.setup_rows[1][4].configure(text="Terminar grabación (F9)")
             self.log(f"Grabando '{name}': haz tu despliegue en el juego y pulsa F9")
@@ -752,6 +759,7 @@ class App:
         self._apply_notebook_style(root)
 
         self._owned: dict[int, AccountPanel] = {}
+        self._owned_lock = threading.Lock()
         self.exclusive: AccountPanel | None = None
 
         self.nb = ttk.Notebook(root, style="Dark.TNotebook")
@@ -800,21 +808,24 @@ class App:
             p.refresh_state()
 
     def claim_window(self, panel: AccountPanel, hwnd: int) -> bool:
-        owner = self._owned.get(hwnd)
-        if owner is not None and owner is not panel:
-            return False
-        self._owned[hwnd] = panel          # runs on the bot thread: no widgets here (the job posts "refresh_all")
-        return True
+        with self._owned_lock:             # bot threads race here when two tabs start at once
+            owner = self._owned.get(hwnd)
+            if owner is not None and owner is not panel:
+                return False
+            self._owned[hwnd] = panel      # no widgets here (bot thread): the job posts "refresh_all"
+            return True
 
     def release_window(self, panel: AccountPanel) -> None:
-        hwnds = [h for h, p in self._owned.items() if p is panel]
-        if hwnds:
+        with self._owned_lock:
+            hwnds = [h for h, p in self._owned.items() if p is panel]
             for h in hwnds:
                 del self._owned[h]
+        if hwnds:
             self._refresh_all()
 
     def window_in_use_by_other(self, panel: AccountPanel, hwnd: int) -> bool:
-        owner = self._owned.get(hwnd)
+        with self._owned_lock:
+            owner = self._owned.get(hwnd)
         return owner is not None and owner is not panel
 
     def try_exclusive(self, panel: AccountPanel) -> bool:
@@ -835,10 +846,13 @@ class App:
             self._refresh_all()
 
     def add_account(self):
+        if len(self.panels) >= accounts.MAX_ACCOUNTS:
+            self.panel.log(f"Ya hay el maximo de cuentas ({accounts.MAX_ACCOUNTS})")
+            return
         try:
             filename, cfg = accounts.add_account(DATA)
-        except ValueError as e:
-            self.panel.log(str(e))
+        except (ValueError, OSError) as e:
+            self.panel.log(f"No se pudo anadir la cuenta: {e}")
             return
         idx = accounts.account_index(filename)
         panel = AccountPanel(self.nb, self, DATA / filename, idx)
@@ -875,11 +889,11 @@ class App:
 
     # -- hotkeys (they run on the listener thread: only post to the Tk thread's queues) ----------
     def _hotkey_stop(self):
-        for p in self.panels:
+        for p in list(self.panels):
             p.q.put(("stop", None))
 
     def _hotkey_end_record(self):
-        for p in self.panels:
+        for p in list(self.panels):
             if p.recorder is not None:
                 p.q.put(("end_record", None))
 

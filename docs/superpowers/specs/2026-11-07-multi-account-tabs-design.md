@@ -86,7 +86,7 @@ threads are viable, no focus switching or input serialisation is needed.
   thresholds). Independent afterwards; recalibrating tab 1 does not change the others.
 - **Closing tabs**: the registry stores explicit file names. Tab 1 cannot be closed. Closing a tab removes it
   from the registry and keeps its config file on disk; a new tab never reuses a file name (next unused number).
-  Closing a running tab asks to stop it first.
+  Closing a running tab is refused with a message (stop it first); it never stops a bot by itself.
 - **Debug captures**: per account, `data/debug/<n>` (n = file number, 1 for `config.json`), pruned per folder.
 - **Account name**: filled automatically from the selected window title (the text after `Clash of Clans - `);
   not typed. Before a window is chosen the tab is called `Cuenta N`.
@@ -108,3 +108,16 @@ test structure.
 5. Live validation on the two real windows: read-only first (both read their own villages), then a supervised
    short run on each.
 6. PR into `develop`, three read-only reviewers, release only on an explicit yes.
+
+## Inactivity reload (added during implementation)
+
+After long idle time the game shows a modal "Estas ahi? Se te ha desconectado por inactividad" dialog that
+swallows every click. Measured live: a click posted to a background window is ignored by this dialog unless the
+window is the active one, and the button needed a slightly different point in each window. So the reload takes
+the focus for a moment (one window at a time, `winctl.focused`), taps a few nearby points while keeping it, waits
+for the dialog to go (the village is visible behind it, so "home" alone proves nothing), retries up to 3 times and
+waits up to 5 minutes for the village (a reload can land in a live replay of an attack). The dialog is recognised
+by its title AND body text; the "Conexion perdida / otro dispositivo" dialog is deliberately never pressed
+(reloading it would kick the account's other session). Known cost: the Alt tap used to unlock
+`SetForegroundWindow` also reaches the user's active app, once when the focus is taken and once when it is given
+back. Not measured: the score of the "otro dispositivo" dialog against these templates (no capture of it was kept).

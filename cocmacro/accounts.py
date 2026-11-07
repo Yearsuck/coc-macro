@@ -2,6 +2,7 @@
 import copy
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,8 @@ def valid_file_name(name: Any) -> bool:
     """True if name is a str matching config.json or config_<n>.json."""
     if not isinstance(name, str):
         return False
-    return re.fullmatch(r"config(_\d+)?\.json", name) is not None
+    # config_1 / config_01 would collide with config.json (index 1): only 2 and up, no leading zeros
+    return re.fullmatch(r"config(_([2-9]|[1-9][0-9]+))?\.json", name) is not None
 
 
 def load_registry(data_dir: Path) -> list[str]:
@@ -52,7 +54,15 @@ def save_registry(data_dir: Path, files: list[str]) -> None:
     """Save the list of account config files to data_dir/accounts.json."""
     d = Path(data_dir)
     d.mkdir(parents=True, exist_ok=True)
-    (d / REGISTRY_FILE).write_text(json.dumps(list(files), indent=2), encoding="utf-8")
+    path = d / REGISTRY_FILE
+    if path.is_file():
+        try:
+            readable = isinstance(json.loads(path.read_text(encoding="utf-8")), list)
+        except Exception:
+            readable = False
+        if not readable:             # keep what the user had instead of silently replacing it
+            shutil.copyfile(path, d / (REGISTRY_FILE + ".bad"))
+    path.write_text(json.dumps(list(files), indent=2), encoding="utf-8")
 
 
 def account_index(file: str) -> int:
