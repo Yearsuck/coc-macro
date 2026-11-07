@@ -9,6 +9,15 @@ from cocmacro import vision
 from cocmacro.config import Config
 
 CLICK_DELAY = 0.4
+# The price of the 'Mejorar tu ...' window is only its first line: with a discount (gold pass) the full price is
+# printed again below it, struck through by a RED line that read as 'cannot pay' (live: 'No hay recursos para la
+# primera mejora' with 31 500 of 29 500 000 gold). Configs saved before keep the taller region, so it is cut here.
+UPGRADE_COST_MAX_Y = 0.885
+
+
+def _price_region(cfg: Config) -> tuple[float, float, float, float]:
+    x0, y0, x1, y1 = cfg.regions["upgrade_cost"]
+    return (x0, y0, x1, min(y1, UPGRADE_COST_MAX_Y))
 MAX_ADDS = 250            # walls added one by one: the price turns red long before this
 SPOT_OFFSETS = ((0.0, 0.0), (-0.015, -0.03), (-0.03, -0.06))   # retries inside the wall block
 
@@ -319,7 +328,7 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep, filters
         log(f"No aparece la ventana de mejora ({slot})")
         return False
     try:
-        if vision.cost_is_red(scr.grab(), cfg.regions["upgrade_cost"]):
+        if vision.cost_is_red(scr.grab(), _price_region(cfg)):
             log(f"No hay recursos para la primera mejora ({slot})")
             return False
         check()
