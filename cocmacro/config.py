@@ -25,6 +25,8 @@ class Config:
     prioritize_heroes: bool = False  # busy mode: upgrade a hero first (Heroe filter) when one can be upgraded
     stop_when_full: bool = False   # do not attack while the gold and elixir storages are full
     deployment: str = "default"
+    window_title: str = ""
+    account_name: str = ""
     aspect: float | None = None
     buttons: dict[str, tuple[float, float]] = field(default_factory=dict)
     regions: dict[str, tuple[float, float, float, float]] = field(
