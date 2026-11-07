@@ -6,17 +6,6 @@ from cocmacro import config, gui, recorder, theme, updater, winctl
 from cocmacro.recorder import Event, Recording
 
 
-@pytest.fixture(scope="module")
-def tk_root():
-    """One Tk root for the module: creating several in a test process fails at random on Windows."""
-    try:
-        root = tk.Tk()
-    except tk.TclError as e:
-        pytest.skip(f"no display: {e}")
-    yield root
-    root.destroy()
-
-
 @pytest.fixture
 def app(tk_root, tmp_path, monkeypatch):
     monkeypatch.setattr(gui, "CFG_PATH", tmp_path / "config.json")
