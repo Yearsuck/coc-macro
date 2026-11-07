@@ -226,31 +226,6 @@ def test_upgrade_busy_passes_the_hero_toggle_but_the_walls_surplus_does_not(tmp_
     assert calls[0].get("heroes") is True and "heroes" not in calls[1]
 
 
-@pytest.fixture(autouse=True)
-def _no_real_focus(monkeypatch):
-    """The real winctl.focused would call Win32 on a fake window handle."""
-    monkeypatch.setattr(winctl, "focused", lambda win, **kw: contextlib.nullcontext())
-    monkeypatch.setattr(game.time, "sleep", lambda s: None)
-
-
-def test_reload_if_disconnected_takes_the_focus_for_the_press(tmp_path, monkeypatch):
-    g, clicks = make(tmp_path, monkeypatch, "f004.png")
-    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
-    events = []
-    monkeypatch.setattr(templates, "match",
-                        lambda frame, name, tpl_dir, threshold=None: name.startswith("reload_inactive") and "click" not in events)
-
-    @contextlib.contextmanager
-    def focus(win, **kw):
-        events.append("focus")
-        yield
-        events.append("release")
-    monkeypatch.setattr(winctl, "focused", focus)
-    monkeypatch.setattr(winctl, "click", lambda win, x, y, hold_s=0.08: events.append("click"))
-    assert g.reload_if_disconnected() is True
-    assert events == ["focus", "click", "release"]
-
-
 def test_inactivity_dialog_reflects_the_template(tmp_path, monkeypatch):
     g, _ = make(tmp_path, monkeypatch, "f004.png")
     monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: name.startswith("reload_inactive"))
@@ -281,32 +256,6 @@ def test_reload_if_disconnected_ignores_other_dialogs_and_templates(tmp_path, mo
     monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: not name.startswith("reload_inactive"))
     assert g.reload_if_disconnected() is False
     assert clicks == []
-
-
-def test_reload_taps_nearby_points_keeping_the_focus_until_the_dialog_is_gone(tmp_path, monkeypatch):
-    """Measured on the real game: the dialog took (0.355, 0.571) in one window and only (0.355, 0.576) in
-    another, and ignored everything once the focus had been handed back."""
-    g, _ = make(tmp_path, monkeypatch, "f004.png")
-    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
-    events, taps = [], []
-
-    def click(win, x, y, hold_s=0.08):
-        taps.append((round(x, 3), round(y, 3)))
-        events.append("click")
-
-    # the dialog is up for the first look and until the third tap has been made
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: len(taps) < 3)
-
-    @contextlib.contextmanager
-    def focus(win, **kw):
-        events.append("focus")
-        yield
-        events.append("release")
-    monkeypatch.setattr(winctl, "focused", focus)
-    monkeypatch.setattr(winctl, "click", click)
-    assert g.reload_if_disconnected() is True
-    assert taps == [(0.355, 0.571), (0.355, 0.576), (0.355, 0.566)]          # stops once the dialog is gone
-    assert events == ["focus", "click", "click", "click", "release"]
 
 
 def test_reload_gives_up_tapping_after_every_point_and_still_reports_the_press(tmp_path, monkeypatch):
@@ -343,18 +292,51 @@ def test_f8_during_the_reload_taps_lets_go_at_once(tmp_path, monkeypatch):
     assert len(taps) == 1                                  # the stop flag ended the sequence after the first tap
 
 
-def test_reload_stopped_while_waiting_for_the_input_does_not_take_the_focus(tmp_path, monkeypatch):
-    """F8 while the other account is deploying: no focus grab, no click."""
+@pytest.fixture(autouse=True)
+def _fast_sleep(monkeypatch):
+    monkeypatch.setattr(game.time, "sleep", lambda s: None)
+
+
+def test_reload_taps_nearby_points_until_the_dialog_is_gone(tmp_path, monkeypatch):
+    """Measured on the real game: the dialog took (0.355, 0.571) in one window and only (0.355, 0.576) in
+    another (while routing was not yet understood); the taps stop as soon as the dialog is gone."""
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    taps = []
+    monkeypatch.setattr(winctl, "click", lambda win, x, y, hold_s=0.08: taps.append((round(x, 3), round(y, 3))))
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: len(taps) < 3)
+    assert g.reload_if_disconnected() is True
+    assert taps == [(0.355, 0.571), (0.355, 0.576), (0.355, 0.566)]
+
+
+def test_reload_holds_the_input_channel_and_never_touches_the_keyboard_focus(tmp_path, monkeypatch):
+    import contextlib
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    events = []
+
+    @contextlib.contextmanager
+    def channel(stop=None, poll=0.2):
+        events.append("hold")
+        yield True
+        events.append("release")
+    monkeypatch.setattr(winctl, "exclusive_input", channel)
+    monkeypatch.setattr(winctl, "click", lambda win, x, y, hold_s=0.08: events.append("click"))
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: "click" not in events)
+    assert g.reload_if_disconnected() is True
+    assert events == ["hold", "click", "release"]
+    assert not hasattr(winctl, "focused")                 # no code path that steals the real focus is left
+
+
+def test_reload_stopped_while_waiting_for_the_input_taps_nothing(tmp_path, monkeypatch):
     import contextlib
     g, clicks = make(tmp_path, monkeypatch, "f004.png")
     g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
     monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: True)
-    taken = []
-    monkeypatch.setattr(winctl, "focused", lambda win, **kw: (taken.append(1), contextlib.nullcontext())[1])
 
     @contextlib.contextmanager
     def not_got(stop=None, poll=0.2):
         yield False
     monkeypatch.setattr(winctl, "exclusive_input", not_got)
     assert g.reload_if_disconnected() is True
-    assert taken == [] and clicks == []
+    assert clicks == []
