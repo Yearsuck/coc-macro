@@ -127,11 +127,16 @@ class RealGame:
         return ocr.read_time_left(frames.grab(self.win), self.cfg.regions["timer"])
 
     def storages_full(self) -> bool | None:
-        """Gold AND elixir storages full. A clear 'not full' wins over an unreadable one."""
+        """Gold, elixir AND dark elixir storages full. A clear 'not full' wins over an unreadable one. The dark
+        elixir bar is optional only in config: with no `storage_dark` region it is ignored (gold and elixir decide)
+        and an unreadable bar (None) is ignored too. An account WITHOUT a dark elixir bar is not detected: the
+        region then shows other pixels and reads as 'not full', so such an account never waits on full storages."""
         frame = frames.grab(self.win)
         gold = vision.storage_full(frame, self.cfg.regions["storage_gold"], hue=GOLD_HUE)
         elixir = vision.storage_full(frame, self.cfg.regions["storage_elixir"], hue=ELIXIR_HUE)
-        if gold is False or elixir is False:
+        region = self.cfg.regions.get("storage_dark")
+        dark = vision.dark_storage_full(frame, region) if region else None
+        if gold is False or elixir is False or dark is False:
             return False
         return True if gold is True and elixir is True else None
 
