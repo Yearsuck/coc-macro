@@ -178,7 +178,7 @@ def test_remove_account(tmp_path):
 
 
 def test_account_name_from_title():
-    assert accounts.account_name_from_title("Clash of Clans - Yearsuckk", "Cuenta 2") == "Yearsuckk"
+    assert accounts.account_name_from_title("Clash of Clans - PlayerTwoo", "Cuenta 2") == "PlayerTwoo"
     assert accounts.account_name_from_title("Other app", "Cuenta 2") == "Cuenta 2"
     assert accounts.account_name_from_title("Clash of Clans", "Cuenta 2") == "Cuenta 2"
     assert accounts.account_name_from_title("Clash of Clans - ", "Cuenta 2") == "Cuenta 2"

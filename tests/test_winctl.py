@@ -42,8 +42,8 @@ def test_window_that_stays_minimized_raises():
 
 
 def test_pick_window_empty_title():
-    w1 = winctl.WindowInfo(1, "Clash of Clans - Ernestitogamer04", 1280, 720)
-    w2 = winctl.WindowInfo(2, "Clash of Clans - Yearsuckk", 1280, 720)
+    w1 = winctl.WindowInfo(1, "Clash of Clans - PlayerOne", 1280, 720)
+    w2 = winctl.WindowInfo(2, "Clash of Clans - PlayerTwoo", 1280, 720)
     assert winctl.pick_window([w1], "") == w1
     assert winctl.pick_window([w1], "   ") == w1
     with pytest.raises(winctl.WindowNotFound):
@@ -53,10 +53,10 @@ def test_pick_window_empty_title():
 
 
 def test_pick_window_exact_beats_contains_and_ambiguous_is_window_not_found():
-    w1 = winctl.WindowInfo(1, "Clash of Clans - Yearsuck", 1280, 720)
-    w2 = winctl.WindowInfo(2, "Clash of Clans - Yearsuckk", 1280, 720)
+    w1 = winctl.WindowInfo(1, "Clash of Clans - PlayerTwo", 1280, 720)
+    w2 = winctl.WindowInfo(2, "Clash of Clans - PlayerTwoo", 1280, 720)
     # Exact match beats the contains match on w2
-    assert winctl.pick_window([w1, w2], "Clash of Clans - Yearsuck") == w1
+    assert winctl.pick_window([w1, w2], "Clash of Clans - PlayerTwo") == w1
     # AmbiguousWindow inherits from WindowNotFound
     assert issubclass(winctl.AmbiguousWindow, winctl.WindowNotFound)
     with pytest.raises(winctl.WindowNotFound):
@@ -64,10 +64,10 @@ def test_pick_window_exact_beats_contains_and_ambiguous_is_window_not_found():
 
 
 def test_pick_window_contains_case_insensitive():
-    w1 = winctl.WindowInfo(1, "Clash of Clans - Ernestitogamer04", 1280, 720)
-    w2 = winctl.WindowInfo(2, "Clash of Clans - Yearsuckk", 1280, 720)
-    assert winctl.pick_window([w1, w2], "yearsuckk") == w2
-    assert winctl.pick_window([w1, w2], "YEARSUCKK") == w2
+    w1 = winctl.WindowInfo(1, "Clash of Clans - PlayerOne", 1280, 720)
+    w2 = winctl.WindowInfo(2, "Clash of Clans - PlayerTwoo", 1280, 720)
+    assert winctl.pick_window([w1, w2], "playertwoo") == w2
+    assert winctl.pick_window([w1, w2], "PLAYERTWOO") == w2
     with pytest.raises(winctl.AmbiguousWindow):
         winctl.pick_window([w1, w2], "Clash")
     with pytest.raises(winctl.WindowNotFound):
@@ -75,15 +75,15 @@ def test_pick_window_contains_case_insensitive():
 
 
 def test_find_game_window_and_list_game_windows(monkeypatch):
-    w1 = winctl.WindowInfo(10, "Clash of Clans - Ernestitogamer04", 1280, 720)
-    w2 = winctl.WindowInfo(20, "Clash of Clans - Yearsuckk", 1920, 1080)
+    w1 = winctl.WindowInfo(10, "Clash of Clans - PlayerOne", 1280, 720)
+    w2 = winctl.WindowInfo(20, "Clash of Clans - PlayerTwoo", 1920, 1080)
     monkeypatch.setattr(winctl, "_enum_game_windows", lambda: [w1])
     assert winctl.list_game_windows() == [w1]
     gw = winctl.find_game_window()
     assert gw == winctl.GameWindow(10, 1280, 720)
 
     monkeypatch.setattr(winctl, "_enum_game_windows", lambda: [w1, w2])
-    assert winctl.find_game_window("yearsuckk") == winctl.GameWindow(20, 1920, 1080)
+    assert winctl.find_game_window("playertwoo") == winctl.GameWindow(20, 1920, 1080)
     with pytest.raises(winctl.AmbiguousWindow):
         winctl.find_game_window()
 

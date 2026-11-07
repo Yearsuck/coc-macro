@@ -158,8 +158,8 @@ def test_close_account_behaviours(app, monkeypatch):
 def test_window_selector_populates_and_updates_tab_title(app, monkeypatch):
     """Selecting a window sets window_title, extracts account_name, saves config, and updates tab title."""
     windows = [
-        WindowInfo(10, "Clash of Clans - Ernestitogamer04", 1296, 729),
-        WindowInfo(20, "Clash of Clans - Yearsuckk", 1296, 729),
+        WindowInfo(10, "Clash of Clans - PlayerOne", 1296, 729),
+        WindowInfo(20, "Clash of Clans - PlayerTwoo", 1296, 729),
     ]
     monkeypatch.setattr(gui.winctl, "list_game_windows", lambda: windows)
 
@@ -167,13 +167,13 @@ def test_window_selector_populates_and_updates_tab_title(app, monkeypatch):
     panel.refresh_windows()
     assert list(panel.win_combo["values"]) == [w.title for w in windows]
 
-    panel.win_combo.set("Clash of Clans - Yearsuckk")
+    panel.win_combo.set("Clash of Clans - PlayerTwoo")
     panel._on_window_selected()
 
-    assert panel.cfg.window_title == "Clash of Clans - Yearsuckk"
-    assert panel.cfg.account_name == "Yearsuckk"
-    assert config.load(panel.cfg_path).window_title == "Clash of Clans - Yearsuckk"
-    assert app.nb.tab(panel, "text") == "Yearsuckk"
+    assert panel.cfg.window_title == "Clash of Clans - PlayerTwoo"
+    assert panel.cfg.account_name == "PlayerTwoo"
+    assert config.load(panel.cfg_path).window_title == "Clash of Clans - PlayerTwoo"
+    assert app.nb.tab(panel, "text") == "PlayerTwoo"
 
 
 def test_window_in_use_shows_suffix_and_selection_is_refused(app, monkeypatch):

@@ -108,10 +108,10 @@ def test_window_title_and_account_name(tmp_path):
     assert loaded.account_name == ""
 
     # Save and load round-trips them
-    cfg.window_title = "Clash of Clans - Ernestitogamer04"
-    cfg.account_name = "Ernestitogamer04"
+    cfg.window_title = "Clash of Clans - PlayerOne"
+    cfg.account_name = "PlayerOne"
     p2 = tmp_path / "named.json"
     config.save(cfg, p2)
     reloaded = config.load(p2)
-    assert reloaded.window_title == "Clash of Clans - Ernestitogamer04"
-    assert reloaded.account_name == "Ernestitogamer04"
+    assert reloaded.window_title == "Clash of Clans - PlayerOne"
+    assert reloaded.account_name == "PlayerOne"
