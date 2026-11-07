@@ -1,3 +1,4 @@
+import contextlib
 import threading
 from pathlib import Path
 
@@ -223,6 +224,37 @@ def test_upgrade_busy_passes_the_hero_toggle_but_the_walls_surplus_does_not(tmp_
     g.upgrade("busy", lambda s: None, lambda: None)
     g.upgrade("surplus", lambda s: None, lambda: None)
     assert calls[0].get("heroes") is True and "heroes" not in calls[1]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_focus(monkeypatch):
+    """The real winctl.focused would call Win32 on a fake window handle."""
+    monkeypatch.setattr(winctl, "focused", lambda win, **kw: contextlib.nullcontext())
+
+
+def test_reload_if_disconnected_takes_the_focus_for_the_press(tmp_path, monkeypatch):
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: name == "reload_inactive")
+    events = []
+
+    @contextlib.contextmanager
+    def focus(win, **kw):
+        events.append("focus")
+        yield
+        events.append("release")
+    monkeypatch.setattr(winctl, "focused", focus)
+    monkeypatch.setattr(winctl, "click", lambda win, x, y, hold_s=0.08: events.append("click"))
+    assert g.reload_if_disconnected() is True
+    assert events == ["focus", "click", "release"]
+
+
+def test_inactivity_dialog_reflects_the_template(tmp_path, monkeypatch):
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: name == "reload_inactive")
+    assert g.inactivity_dialog() is True
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: False)
+    assert g.inactivity_dialog() is False
 
 
 def test_reload_if_disconnected_clicks_when_template_present(tmp_path, monkeypatch):

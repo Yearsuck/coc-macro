@@ -29,6 +29,51 @@ def test_minimized_window_is_restored_without_taking_focus():
     assert pos[1] == winctl.HWND_BOTTOM and pos[2] & winctl.SWP_NOACTIVATE
 
 
+class FakeFocusApi:
+    """user32 stand-in for focused(): remembers who has the focus."""
+
+    def __init__(self, foreground=5):
+        self.fg, self.calls = foreground, []
+
+    def GetForegroundWindow(self):
+        return self.fg
+
+    def keybd_event(self, vk, scan, flags, extra):
+        self.calls.append(("key", vk, flags))
+
+    def SetForegroundWindow(self, hwnd):
+        self.calls.append(("fg", hwnd))
+        self.fg = hwnd
+        return 1
+
+    def IsWindow(self, hwnd):
+        return 1
+
+
+def test_focused_takes_the_focus_and_gives_it_back():
+    api = FakeFocusApi(foreground=5)
+    with winctl.focused(winctl.GameWindow(9, 10, 10), api=api, sleep=lambda s: None):
+        assert api.fg == 9
+    assert api.fg == 5
+    assert [c for c in api.calls if c[0] == "fg"] == [("fg", 9), ("fg", 5)]
+    assert ("key", winctl.VK_MENU, 0) in api.calls                     # the Alt tap that unlocks it
+
+
+def test_focused_leaves_an_already_active_window_alone():
+    api = FakeFocusApi(foreground=9)
+    with winctl.focused(winctl.GameWindow(9, 10, 10), api=api, sleep=lambda s: None):
+        pass
+    assert api.calls == []
+
+
+def test_focused_gives_the_focus_back_even_if_the_body_raises():
+    api = FakeFocusApi(foreground=5)
+    with pytest.raises(RuntimeError):
+        with winctl.focused(winctl.GameWindow(9, 10, 10), api=api, sleep=lambda s: None):
+            raise RuntimeError("boom")
+    assert api.fg == 5
+
+
 def test_visible_window_is_left_alone():
     api = FakeUser32(iconic=False)
     assert winctl.restore_if_minimized(winctl.GameWindow(1, 10, 10), api=api, sleep=lambda s: None) is False

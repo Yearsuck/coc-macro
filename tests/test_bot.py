@@ -300,6 +300,36 @@ def test_reload_if_disconnected_dry_run_never_calls_game():
     assert logs == []
 
 
+class DialogReloadGame(ReloadGame):
+    """The inactivity dialog stays up for `dialog_polls` looks; the village is visible behind it all the time."""
+
+    def __init__(self, dialog_polls, **kw):
+        super().__init__(**kw)
+        self.dialog_polls, self.dialog_calls = dialog_polls, 0
+        self.screen = "home"
+
+    def inactivity_dialog(self):
+        self.dialog_calls += 1
+        return self.dialog_calls <= self.dialog_polls
+
+
+def test_reload_waits_for_the_dialog_to_go_away_before_trusting_home():
+    g = DialogReloadGame(3, reloads=[True], home_after=0)
+    bot, logs, _ = make(g)
+    assert bot._reload_if_disconnected() is True
+    assert g.dialog_calls == 4 and g.reload_calls == 1          # 3 looks with the dialog, then it is gone
+
+
+def test_reload_presses_again_when_the_dialog_stays_and_gives_up_after_the_tries():
+    from cocmacro.bot import RELOAD_TRIES
+    g = DialogReloadGame(10 ** 6, reloads=[True] * 10, home_after=0)
+    bot, logs, _ = make(g)
+    with pytest.raises(_Abort, match="aviso sigue"):
+        bot._reload_if_disconnected()
+    assert g.reload_calls == RELOAD_TRIES                       # the first press plus the retries
+    assert sum("pulso otra vez" in m for m in logs) == RELOAD_TRIES - 1
+
+
 def test_reload_if_disconnected_never_home_aborts():
     g = ReloadGame(reloads=[True], home_after=999999)
     slept = []

@@ -20,7 +20,9 @@ STORAGE_READ_GAP = 0.4   # seconds between the readings of the storage bars
 MAX_SPEND_ROUNDS = 10    # upgrade routines run back to back before an attack
 FAIL_WAIT_S = 30         # pause after an upgrade routine that did nothing, before trying again
 UNREADABLE_LIMIT = 5   # villages in a row whose loot cannot be read before giving up
-RELOAD_WAIT_S = 120      # seconds to wait for the village after pressing reload
+RELOAD_WAIT_S = 300      # seconds to wait for the village after reloading (it can open a live replay of an attack, ~3 min)
+RELOAD_TRIES = 3         # presses of VOLVER A CARGAR before giving up
+RELOAD_PRESS_WAIT_S = 20  # seconds to see the dialog go away after a press
 RELOAD_SETTLE_S = 2      # extra seconds once the village is back
 
 
@@ -32,6 +34,7 @@ class Game(Protocol):
     def read_time_left(self) -> int | None: ...  # battle clock, seconds
     def play_deployment(self) -> bool: ...
     def reload_if_disconnected(self) -> bool: ...  # inactivity dialog: press it, True if pressed
+    def inactivity_dialog(self) -> bool: ...       # optional: is that dialog still on screen
 
 
 class _Abort(Exception):
@@ -113,6 +116,23 @@ class Bot:
         if not pressed:
             return False
         self.log("Sesion desconectada por inactividad: recargo")
+        # The village is visible behind the dialog, so "home" alone proves nothing: first the dialog must go.
+        # If it stays the press was not taken: press again.
+        still_up = getattr(self.game, "inactivity_dialog", None)
+        if still_up:
+            for attempt in range(RELOAD_TRIES):
+                for _ in range(max(1, int(RELOAD_PRESS_WAIT_S / POLL))):
+                    self._check()
+                    if not still_up():
+                        break
+                    self.sleep(POLL)
+                else:
+                    if attempt + 1 >= RELOAD_TRIES:
+                        raise _Abort("La sesion no se recargo: el aviso sigue ahi")
+                    self.log("El aviso sigue: pulso otra vez")
+                    fn()
+                    continue
+                break
         for _ in range(max(1, int(RELOAD_WAIT_S / POLL))):
             self._check()
             if self.game.screen_is("home"):
