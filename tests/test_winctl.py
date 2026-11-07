@@ -29,51 +29,6 @@ def test_minimized_window_is_restored_without_taking_focus():
     assert pos[1] == winctl.HWND_BOTTOM and pos[2] & winctl.SWP_NOACTIVATE
 
 
-class FakeFocusApi:
-    """user32 stand-in for focused(): remembers who has the focus."""
-
-    def __init__(self, foreground=5):
-        self.fg, self.calls = foreground, []
-
-    def GetForegroundWindow(self):
-        return self.fg
-
-    def keybd_event(self, vk, scan, flags, extra):
-        self.calls.append(("key", vk, flags))
-
-    def SetForegroundWindow(self, hwnd):
-        self.calls.append(("fg", hwnd))
-        self.fg = hwnd
-        return 1
-
-    def IsWindow(self, hwnd):
-        return 1
-
-
-def test_focused_takes_the_focus_and_gives_it_back():
-    api = FakeFocusApi(foreground=5)
-    with winctl.focused(winctl.GameWindow(9, 10, 10), api=api, sleep=lambda s: None):
-        assert api.fg == 9
-    assert api.fg == 5
-    assert [c for c in api.calls if c[0] == "fg"] == [("fg", 9), ("fg", 5)]
-    assert ("key", winctl.VK_MENU, 0) in api.calls                     # the Alt tap that unlocks it
-
-
-def test_focused_leaves_an_already_active_window_alone():
-    api = FakeFocusApi(foreground=9)
-    with winctl.focused(winctl.GameWindow(9, 10, 10), api=api, sleep=lambda s: None):
-        pass
-    assert api.calls == []
-
-
-def test_focused_gives_the_focus_back_even_if_the_body_raises():
-    api = FakeFocusApi(foreground=5)
-    with pytest.raises(RuntimeError):
-        with winctl.focused(winctl.GameWindow(9, 10, 10), api=api, sleep=lambda s: None):
-            raise RuntimeError("boom")
-    assert api.fg == 5
-
-
 def test_visible_window_is_left_alone():
     api = FakeUser32(iconic=False)
     assert winctl.restore_if_minimized(winctl.GameWindow(1, 10, 10), api=api, sleep=lambda s: None) is False
@@ -192,32 +147,6 @@ def test_exclusive_input_gives_up_when_stop_is_set_while_waiting():
     assert result == [False]
 
 
-def test_covering_window_picks_the_highest_overlapping_clash_window_above():
-    rects = {1: (0, 0, 100, 100), 2: (50, 50, 150, 150), 3: (500, 500, 600, 600), 4: (60, 60, 160, 160)}
-    order = [3, 4, 2, 1]                                   # top first
-    assert winctl.covering_window(order, rects, 1) == 4     # 4 is the highest one above 1 that overlaps it
-    assert winctl.covering_window(order, rects, 2) == 4
-    assert winctl.covering_window(order, rects, 4) is None  # nothing overlapping is above it
-    assert winctl.covering_window(order, rects, 3) is None  # 3 is on top and elsewhere
-    assert winctl.covering_window([2, 1], {1: (0, 0, 10, 10), 2: (20, 20, 30, 30)}, 1) is None  # no overlap
-    assert winctl.covering_window(order, rects, 99) is None  # not a Clash window
-
-
-def test_a_tap_raises_a_covered_window_before_pressing(monkeypatch):
-    calls = []
-    monkeypatch.setattr(winctl, "raise_above_overlapping", lambda win: calls.append("raise"))
-    monkeypatch.setattr(winctl, "post_mouse", lambda win, kind, x, y: calls.append(kind))
-    winctl.click(winctl.GameWindow(1, 10, 10), 0.5, 0.5, hold_s=0)
-    assert calls == ["raise", "down", "up"]
-
-
-def test_raising_ignores_a_window_that_is_not_a_clash_window(monkeypatch):
-    monkeypatch.setattr(winctl, "_game_hwnds", lambda: [7, 8])
-    assert winctl.raise_above_overlapping(winctl.GameWindow(1, 10, 10)) is False
-    assert winctl.raise_above_overlapping(object()) is False
-    assert winctl.overlapping_titles(winctl.GameWindow(1, 10, 10)) == []
-
-
 def test_finding_the_game_windows_never_reads_window_titles(monkeypatch):
     """Reading a title blocks on a window whose thread does not pump messages (the Tk root of the app/tests)."""
     def no_titles(hwnd):
@@ -227,72 +156,85 @@ def test_finding_the_game_windows_never_reads_window_titles(monkeypatch):
     assert isinstance(winctl._game_hwnds(), list)
 
 
-def test_raising_from_a_thread_while_the_main_thread_is_blocked_does_not_hang(monkeypatch):
-    """The first version hung here: the worker enumerated windows while the main thread sat in join()."""
-    import threading
-    monkeypatch.setattr(winctl, "_games_cache", (0.0, []))
-    result = []
-    t = threading.Thread(target=lambda: result.append(winctl.raise_above_overlapping(winctl.GameWindow(1, 10, 10))))
-    t.start()
-    t.join(20)
-    assert not t.is_alive() and result == [False]
+class _Sender:
+    """user32 stand-in recording the activation messages."""
+
+    def __init__(self):
+        self.sent = []
+
+    def SendMessageTimeoutW(self, hwnd, msg, wparam, lparam, flags, timeout, result):
+        self.sent.append((hwnd, msg, wparam, lparam))
+        return 1
 
 
-class _FakeUser32:
-    def __init__(self, above=99):
-        self.above, self.set_calls = above, []
-
-    def GetWindow(self, hwnd, cmd):
-        assert cmd == winctl.GW_HWNDPREV
-        return self.above
-
-    def SetWindowPos(self, hwnd, after, x, y, w, h, flags):
-        self.set_calls.append((hwnd, after, flags))
-
-
-def _arrange(monkeypatch, order, rects, above=99):
-    fake = _FakeUser32(above)
+def _two_windows(monkeypatch, games=(1, 2)):
+    fake = _Sender()
     monkeypatch.setattr(winctl, "user32", fake)
-    monkeypatch.setattr(winctl, "_game_hwnds", lambda: list(order))
-    monkeypatch.setattr(winctl, "_zorder_top_first", lambda: [5] + list(order))
-    monkeypatch.setattr(winctl, "_rect_of", lambda h: rects[h])
+    monkeypatch.setattr(winctl, "_game_hwnds", lambda: list(games))
+    monkeypatch.setattr(winctl, "_last_active_hwnd", 0)
     monkeypatch.setattr(winctl.time, "sleep", lambda s: None)
     return fake
 
 
-def test_raising_puts_the_window_directly_above_the_covering_one(monkeypatch):
-    fake = _arrange(monkeypatch, [1, 2], {1: (0, 0, 100, 100), 2: (50, 0, 150, 100)}, above=99)
-    assert winctl.raise_above_overlapping(winctl.GameWindow(2, 10, 10)) is True
-    assert fake.set_calls == [(2, 99, winctl.SWP_NOSIZE | winctl.SWP_NOMOVE | winctl.SWP_NOACTIVATE)]
+def test_activating_an_instance_marks_it_active_and_the_others_inactive(monkeypatch):
+    fake = _two_windows(monkeypatch, games=(1, 2, 3))
+    assert winctl.activate_instance(winctl.GameWindow(2, 10, 10)) is True
+    assert fake.sent == [(2, winctl.WM_ACTIVATE, winctl.WA_ACTIVE, 0),
+                         (1, winctl.WM_ACTIVATE, winctl.WA_INACTIVE, 2),
+                         (3, winctl.WM_ACTIVATE, winctl.WA_INACTIVE, 2)]
 
 
-def test_raising_uses_the_top_when_nothing_is_above_the_covering_window(monkeypatch):
-    fake = _arrange(monkeypatch, [1, 2], {1: (0, 0, 100, 100), 2: (50, 0, 150, 100)}, above=0)
-    assert winctl.raise_above_overlapping(winctl.GameWindow(2, 10, 10)) is True
-    assert fake.set_calls[0][1] == winctl.HWND_TOP
-
-
-def test_a_window_already_above_or_apart_is_not_touched(monkeypatch):
-    fake = _arrange(monkeypatch, [1, 2], {1: (0, 0, 100, 100), 2: (50, 0, 150, 100)})
-    assert winctl.raise_above_overlapping(winctl.GameWindow(1, 10, 10)) is False       # it is the one on top
-    fake2 = _arrange(monkeypatch, [1, 2], {1: (0, 0, 100, 100), 2: (500, 0, 600, 100)})
-    assert winctl.raise_above_overlapping(winctl.GameWindow(2, 10, 10)) is False       # side by side
-    assert fake.set_calls == [] and fake2.set_calls == []
+def test_a_single_game_window_or_a_stranger_is_left_alone(monkeypatch):
+    fake = _two_windows(monkeypatch, games=(1,))
+    assert winctl.activate_instance(winctl.GameWindow(1, 10, 10)) is False        # nobody to arbitrate with
+    fake2 = _two_windows(monkeypatch, games=(1, 2))
+    assert winctl.activate_instance(winctl.GameWindow(99, 10, 10)) is False       # not a game window
+    assert winctl.activate_instance(object()) is False
+    assert fake.sent == [] and fake2.sent == []
 
 
 def test_a_window_missing_from_a_stale_list_is_looked_for_again(monkeypatch):
-    fake = _arrange(monkeypatch, [1, 2], {1: (0, 0, 100, 100), 2: (50, 0, 150, 100)})
+    fake = _two_windows(monkeypatch)
     lists = iter([[1], [1, 2]])                         # the cached list lacks window 2; the fresh one has it
     monkeypatch.setattr(winctl, "_game_hwnds", lambda: next(lists))
-    monkeypatch.setattr(winctl, "_zorder_top_first", lambda: [1, 2])
-    assert winctl.raise_above_overlapping(winctl.GameWindow(2, 10, 10)) is True
-    assert len(fake.set_calls) == 1
+    assert winctl.activate_instance(winctl.GameWindow(2, 10, 10)) is True
+    assert len(fake.sent) == 2
 
 
-def test_overlapping_titles_lists_only_the_windows_that_overlap(monkeypatch):
-    monkeypatch.setattr(winctl, "_game_hwnds", lambda: [1, 2, 3])
-    rects = {1: (0, 0, 100, 100), 2: (50, 0, 150, 100), 3: (500, 0, 600, 100)}
-    monkeypatch.setattr(winctl, "_rect_of", lambda h: rects[h])
-    monkeypatch.setattr(winctl, "_title", lambda h: f"Clash of Clans - {h}")
-    assert winctl.overlapping_titles(winctl.GameWindow(1, 10, 10)) == ["Clash of Clans - 2"]
-    assert winctl.overlapping_titles(winctl.GameWindow(3, 10, 10)) == []
+def test_the_host_gets_a_moment_to_switch_when_the_instance_changes_or_after_a_while(monkeypatch):
+    _two_windows(monkeypatch)
+    pauses, clock = [], [100.0]
+    monkeypatch.setattr(winctl.time, "sleep", lambda s: pauses.append(s))
+    monkeypatch.setattr(winctl.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(winctl, "_last_active_at", 0.0)
+    winctl.activate_instance(winctl.GameWindow(1, 10, 10))                        # first time: pause
+    clock[0] += 0.2
+    winctl.activate_instance(winctl.GameWindow(1, 10, 10))                        # same instance, just now: none
+    winctl.activate_instance(winctl.GameWindow(2, 10, 10))                        # another instance: pause
+    clock[0] += 5.0
+    winctl.activate_instance(winctl.GameWindow(2, 10, 10))                        # same, but the user may have clicked
+    assert pauses == [winctl.ACTIVATE_SETTLE_S] * 3
+
+
+def test_the_windows_call_has_explicit_argument_types():
+    """No truncation of handles / lparam through the default int conversion."""
+    assert len(winctl.user32.SendMessageTimeoutW.argtypes) == 7
+
+
+def test_a_tap_marks_its_window_active_before_pressing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(winctl, "activate_instance", lambda win: calls.append("activate"))
+    monkeypatch.setattr(winctl, "post_mouse", lambda win, kind, x, y: calls.append(kind))
+    winctl.click(winctl.GameWindow(1, 10, 10), 0.5, 0.5, hold_s=0)
+    assert calls == ["activate", "down", "up"]
+
+
+def test_activating_from_a_thread_while_the_main_thread_is_blocked_does_not_hang(monkeypatch):
+    """Looking for the game windows once hung here (title reads block on a non-pumping thread)."""
+    import threading
+    monkeypatch.setattr(winctl, "_games_cache", (0.0, []))
+    result = []
+    t = threading.Thread(target=lambda: result.append(winctl.activate_instance(winctl.GameWindow(1, 10, 10))))
+    t.start()
+    t.join(20)
+    assert not t.is_alive() and result == [False]

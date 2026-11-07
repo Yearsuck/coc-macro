@@ -15,7 +15,7 @@ def play(win, rec: Recording, stop: threading.Event, sleep=time.sleep,
     with winctl.exclusive_input(stop) as got:
         if not got:
             return False
-        winctl.raise_above_overlapping(win)      # the game sends the drag to whatever Clash window is visible there
+        winctl.activate_instance(win)            # the host forwards the drag to the ACTIVE instance only
         return _replay(win, rec, stop, sleep, post, post_wheel)
 
 
