@@ -721,3 +721,179 @@ def test_busy_stops_when_the_counter_stays_unreadable_after_a_confirm(monkeypatc
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
     upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
     assert scr.confirms == 1
+
+
+# ── hero priority and never-upgrade rows ─────────────────────────────
+
+HERO_BTN = (0.72, 0.34)
+
+
+class _HeroScreen(FakeScreen):
+    """Construir menu whose Heroe filter button toggles when pressed (and can be missing or stuck)."""
+
+    def __init__(self, hero_exists=True, hero_on=False, sticky=False, **find):
+        super().__init__(has_templates={"menu_close_x": True, "filter_permanent_on": True,
+                                        "filter_cost_min_on": True, "upgrade_window": True},
+                         find_templates={"filtered_header": (0.87, 0.46), **find})
+        self.hero_exists, self.hero_on, self.sticky = hero_exists, hero_on, sticky
+        self.finds: list[str] = []
+        self.hero_presses = 0
+        self.confirms = 0
+
+    def click(self, x, y):
+        super().click(x, y)
+        if (x, y) == HERO_BTN:
+            self.hero_presses += 1
+            if self.hero_exists and not self.sticky:
+                self.hero_on = not self.hero_on
+        if self.click_names[-1] == "upgrade_confirm":
+            self.confirms += 1
+
+    def has(self, template):
+        if template == "filter_hero_on":
+            return self.hero_on
+        if template == "filter_hero":
+            return self.hero_exists and not self.hero_on
+        return super().has(template)
+
+    def find(self, template):
+        self.finds.append(template)
+        if template == "filter_hero":
+            return HERO_BTN if self.hero_exists and not self.hero_on else None
+        if template == "filter_hero_on":
+            return HERO_BTN if self.hero_on else None
+        return super().find(template)
+
+
+def _run(monkeypatch, scr, builders=1, heroes=False, red=False):
+    cfg = _busy_cfg()
+    monkeypatch.setattr(vision, "free_count", lambda _f, r: max(builders - scr.confirms, 0)
+                        if r == cfg.regions["tab_count_builders"] else 0)
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: red)
+    logs: list[str] = []
+    ok = upgrade_busy(scr, cfg, logs.append, lambda: None, _nop_sleep, heroes=heroes)
+    return ok, logs
+
+
+def test_busy_with_heroes_selects_the_hero_filter_first(monkeypatch):
+    scr = _HeroScreen()
+    ok, logs = _run(monkeypatch, scr, heroes=True)
+    assert ok is True and scr.confirms == 1
+    assert scr.hero_presses == 1 and scr.hero_on is True
+    assert scr.click_names.count("tab_builders") == 1            # no second, plain attempt
+    assert any("heroe" in line for line in logs)
+
+
+def test_busy_with_heroes_falls_back_when_the_hero_filter_cannot_be_selected(monkeypatch):
+    scr = _HeroScreen(hero_exists=False)
+    ok, logs = _run(monkeypatch, scr, heroes=True)
+    assert ok is True and scr.confirms == 1
+    assert scr.click_names.count("tab_builders") == 2             # hero try, then the usual one
+    assert any("Filtros no activados" in line for line in logs)
+    assert not any("heroe" in line for line in logs)
+
+
+def test_busy_with_heroes_falls_back_when_the_hero_list_is_empty_and_switches_the_filter_off(monkeypatch):
+    rows = iter([None, None])                                     # empty hero list (both looks), then a plain list
+    monkeypatch.setattr(vision, "first_upgrade_row", lambda _f: next(rows, ROW))
+    scr = _HeroScreen()
+    ok, logs = _run(monkeypatch, scr, heroes=True)
+    assert ok is True and scr.confirms == 1
+    assert scr.hero_on is False and scr.hero_presses == 2         # on for the hero try, off for the plain one
+    assert any("No encuentro la lista" in line for line in logs)
+
+
+def test_busy_with_heroes_falls_back_when_the_hero_price_is_red(monkeypatch):
+    cfg = _busy_cfg()
+    scr = _HeroScreen()
+    monkeypatch.setattr(vision, "free_count", lambda _f, r: max(1 - scr.confirms, 0)
+                        if r == cfg.regions["tab_count_builders"] else 0)
+    reds = iter([True, False])                                    # the hero cannot be paid; the plain one can
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: next(reds, False))
+    assert upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep, heroes=True) is True
+    assert scr.click_names.count("tab_builders") == 2 and scr.confirms == 1
+
+
+def test_a_failed_hero_try_is_not_repeated_for_every_upgrade_of_the_tab(monkeypatch):
+    scr = _HeroScreen(hero_exists=False)
+    ok, logs = _run(monkeypatch, scr, builders=3, heroes=True)
+    assert scr.confirms == 3
+    assert sum("Filtros no activados" in line for line in logs) == 1      # tried once, then plain only
+
+
+def test_no_free_builder_notice_after_the_hero_try_does_not_start_a_plain_attempt(monkeypatch):
+    scr = _HeroScreen()
+    scr._has["no_builder_dialog"] = True
+    ok, logs = _run(monkeypatch, scr, heroes=True)
+    assert ok is False
+    assert scr.click_names.count("tab_builders") == 1 and scr.click_names.count("upgrade_confirm") == 1
+
+
+def test_without_heroes_the_hero_filter_is_never_selected(monkeypatch):
+    scr = _HeroScreen()
+    ok, _ = _run(monkeypatch, scr)
+    assert ok is True and scr.hero_presses == 0 and scr.confirms == 1
+
+
+def test_a_remembered_hero_filter_is_switched_off_for_the_plain_flow(monkeypatch):
+    scr = _HeroScreen(hero_on=True)
+    ok, _ = _run(monkeypatch, scr)
+    assert ok is True and scr.hero_on is False and scr.hero_presses == 1
+
+
+def test_a_hero_filter_that_will_not_switch_off_stops_the_plain_attempt(monkeypatch):
+    scr = _HeroScreen(hero_on=True, sticky=True)
+    ok, logs = _run(monkeypatch, scr)
+    assert ok is False and scr.confirms == 0
+    assert any("No pude apagar" in line for line in logs)
+
+
+def test_clear_filter_reports_what_it_saw():
+    from cocmacro.upgrades import _clear_filter
+    off = FakeScreen(has_templates={"a": True})
+    assert _clear_filter(off, "a", "a_on", lambda: None, _nop_sleep) == "off"
+    assert _clear_filter(FakeScreen(), "a", "a_on", lambda: None, _nop_sleep) == "unknown"
+    stuck = FakeScreen(has_templates={"a": False}, find_templates={"a_on": (0.5, 0.5)})
+    assert _clear_filter(stuck, "a", "a_on", lambda: None, _nop_sleep) == "stuck"
+
+
+def test_busy_skips_a_row_named_like_a_never_upgrade_item(monkeypatch):
+    from cocmacro.upgrades import NAME_DY, ROW_PITCH
+    scr = _HeroScreen(skip_arrojatroncos=(0.82, ROW[1] + NAME_DY))
+    ok, _ = _run(monkeypatch, scr)
+    assert ok is True
+    assert (ROW[0], ROW[1] + ROW_PITCH) in scr.clicks and ROW not in scr.clicks
+
+
+def test_several_forbidden_rows_in_a_row_are_all_skipped(monkeypatch):
+    from cocmacro.upgrades import NAME_DY, ROW_PITCH
+    scr = _HeroScreen(skip_arrojatroncos=(0.82, ROW[1] + NAME_DY),
+                      skip_destructor=(0.82, ROW[1] + ROW_PITCH + NAME_DY),
+                      skip_tiradora=(0.82, ROW[1] + 2 * ROW_PITCH + NAME_DY))
+    ok, _ = _run(monkeypatch, scr)
+    assert ok is True and (ROW[0], ROW[1] + 3 * ROW_PITCH) in scr.clicks
+    for k in range(3):
+        assert (ROW[0], ROW[1] + k * ROW_PITCH) not in scr.clicks
+
+
+def test_a_single_missed_look_does_not_let_a_forbidden_row_through(monkeypatch):
+    """The name is not seen on the first look (list still drawing) but is on the second: the row is skipped."""
+    from cocmacro.upgrades import NAME_DY, ROW_PITCH
+    looks = iter([None, (0.82, ROW[1] + NAME_DY)])
+    scr = _HeroScreen(skip_arrojatroncos=lambda: next(looks, None))
+    ok, _ = _run(monkeypatch, scr)
+    assert ok is True and ROW not in scr.clicks and (ROW[0], ROW[1] + ROW_PITCH) in scr.clicks
+
+
+def test_never_upgrade_name_on_another_row_does_not_block_this_one(monkeypatch):
+    scr = _HeroScreen(skip_destructor=(0.82, 0.60))               # far from the first row
+    _run(monkeypatch, scr)
+    assert ROW in scr.clicks
+
+
+def test_allowed_row_gives_up_when_the_list_ends():
+    from cocmacro.upgrades import NAME_DY, _allowed_row
+    first = (0.87, 0.80)
+    scr = FakeScreen(find_templates={"skip_tiradora": (0.82, first[1] + NAME_DY)})
+    assert _allowed_row(scr, first) is None                       # the next row would be on the tabs
+    assert _allowed_row(FakeScreen(), first) == first

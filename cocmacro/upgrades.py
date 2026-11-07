@@ -192,23 +192,91 @@ BUSY_TABS = (
      (("filter_cost_min", "filter_cost_min_on"),)),
     ("pets", "tab_pets", "tab_count_pets", ()),
 )
+HERO_FILTER = (("filter_hero", "filter_hero_on"),)
+PLAIN_FILTERS = (("filter_permanent", "filter_permanent_on"), ("filter_cost_min", "filter_cost_min_on"))
+# Rows the user never wants upgraded (siege machines that the 'Heroe' filter also lists): matched by their name text.
+NEVER_UPGRADE = ("skip_arrojatroncos", "skip_destructor", "skip_tiradora")
+ROW_PITCH = 0.0796        # distance between two rows of the list (58 px at 729 high)
+NAME_DY = -0.0137         # the name text sits this far above the row centre found by first_upgrade_row
+MAX_ROWS_SKIPPED = 6
 MAX_PER_TAB = 8      # upgrades pressed in one tab before looking again (a builder count is at most a few)
 
 
-def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool:
+def _clear_filter(scr: Screen, off: str, on: str, check, sleep) -> str:
+    """Make sure a filter button is NOT selected (the game remembers the last filters): press it only if it
+    is seen selected. 'off' = it is off (or was switched off and seen off), 'stuck' = it was seen selected,
+    was pressed and is still selected, 'unknown' = neither look was ever seen (popup not drawn, template
+    missing)."""
+    for _ in range(4):               # the popup takes a moment to draw
+        check()
+        if scr.has(off):
+            return "off"
+        pos = scr.find(on)
+        if pos is not None:
+            scr.click(*pos)
+            sleep(CLICK_DELAY)
+            for _ in range(3):
+                check()
+                if scr.has(off):
+                    return "off"
+                sleep(0.4)
+            return "stuck"
+        sleep(0.5)
+    return "unknown"
+
+
+def _name_is_blocked(scr: Screen, name_y: float) -> bool:
+    return any((pos := scr.find(n)) is not None and abs(pos[1] - name_y) < 0.03 for n in NEVER_UPGRADE)
+
+
+def _allowed_row(scr: Screen, first: tuple[float, float], sleep=lambda _s: None) -> tuple[float, float] | None:
+    """The first row from `first` down whose name is not on the never-upgrade list. None if every visible row
+    is one of them or the list ends. A row counts as allowed only if two looks, a moment apart, both fail to
+    see a forbidden name: the guard is a template match, so a single miss while the list is still drawing
+    must not let a forbidden row through."""
+    for k in range(MAX_ROWS_SKIPPED):
+        y = first[1] + k * ROW_PITCH
+        if y > vision.ROW_Y_MAX:
+            return None
+        name_y = y + NAME_DY
+        if _name_is_blocked(scr, name_y):
+            continue
+        sleep(0.3)
+        if _name_is_blocked(scr, name_y):
+            continue
+        return (first[0], y)
+    return None
+
+
+def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep, filters=None, clear=None,
+                       state=None) -> bool:
     """On the open Construir menu: open the tab, apply its filters, press the first row and confirm the
-    green button of the 'Mejorar tu ...' window. Never presses the grey hammer button, never a red price."""
-    slot, tab_button, _count, filters = tab
+    green button of the 'Mejorar tu ...' window. Never presses the grey hammer button, never a red price.
+
+    `filters` / `clear` override the tab's filters to select and name filters that must be OFF. On the
+    builders tab the hero filter is cleared by default (the game remembers it). `state`, if given, gets
+    `no_builder=True` when the game said there is no free builder (trying again is pointless)."""
+    slot, tab_button, _count, tab_filters = tab
+    filters = tab_filters if filters is None else filters
+    if clear is None:
+        clear = HERO_FILTER if slot == "builders" else ()
     check()
     scr.click(*cfg.buttons[tab_button])
     sleep(CLICK_DELAY + 0.4)
-    if filters:
+    if filters or clear:
         popup_open = False
         try:
             check()
             scr.click(*cfg.buttons["filter"])
             sleep(CLICK_DELAY)
             popup_open = True
+            for off, on in clear:
+                result = _clear_filter(scr, off, on, check, sleep)
+                if result == "stuck":
+                    log(f"No pude apagar el filtro {off} ({slot})")
+                    return False
+                if result == "unknown":
+                    log(f"No pude comprobar el filtro {off} ({slot})")
             if not all(_select_filter(scr, off, on, check, sleep) for off, on in filters):
                 log(f"Filtros no activados ({slot})")
                 return False
@@ -224,6 +292,11 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
     if row is None:
         log(f"No encuentro la lista de mejoras ({slot})")
         return False
+    if slot == "builders":
+        row = _allowed_row(scr, row, sleep)
+        if row is None:
+            log(f"Solo hay mejoras que no quiero hacer ({slot})")
+            return False
     # Price of the first row, read BEFORE clicking: the click changes the screen
     if vision.cost_is_red(scr.grab(), (0.86, row[1] + 0.005, 0.995, row[1] + 0.055)):
         log(f"Primera mejora demasiado cara ({slot})")
@@ -242,6 +315,8 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
         scr.click(*cfg.buttons["upgrade_confirm"])      # the green button; the grey one is the hammer item
         sleep(CLICK_DELAY + 0.6)
         if _dismiss_no_builder(scr, cfg, log, check, sleep):
+            if state is not None:
+                state["no_builder"] = True
             return False
         return True
     finally:
@@ -251,13 +326,16 @@ def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep) -> bool
             sleep(CLICK_DELAY)
 
 
-def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=None) -> bool:
+def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=None, heroes=False) -> bool:
     """Open Construir, and for every tab (builders, researchers, pets) with a free slot keep upgrading its
     cheapest filtered row until the tab's counter reaches 0 or the price cannot be paid. True if at least one
     upgrade was confirmed. Always leaves the menu closed.
 
     `only` restricts it to some tabs (slot names) and `keep` maps a slot to how many free slots to LEAVE: the
-    walls mode keeps exactly one builder free for the walls, so it asks for only=("builders",), keep={"builders": 1}."""
+    walls mode keeps exactly one builder free for the walls, so it asks for only=("builders",), keep={"builders": 1}.
+
+    `heroes`: on the builders tab try the Heroe filter first (its first allowed row); when there is none or it
+    cannot be paid, fall back to the cheapest permanent upgrade as usual."""
     keep = keep or {}
     check()
     scr.click(*cfg.buttons["build"])
@@ -272,15 +350,24 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
         todo = [t for t in BUSY_TABS if (only is None or t[0] in only) and (free[t[0]] or 0) > keep.get(t[0], 0)]
         if not todo:
             log("Nada libre en el menu Construir")
+        hero_try = heroes            # one failed hero attempt (none to upgrade, too dear) ends the tries
         for tab in todo:
             slot, _btn, count_region = tab[0], tab[1], tab[2]
             left, reserve = free[slot] or 0, keep.get(slot, 0)
             for _ in range(MAX_PER_TAB):
                 # drain the tab: the cheapest item again and again until its counter is 0 or it cannot be paid
-                if not _first_row_upgrade(scr, cfg, tab, log, check, sleep):
+                hero_done, state = False, {}
+                if hero_try and slot == "builders":
+                    hero_done = _first_row_upgrade(scr, cfg, tab, log, check, sleep, filters=HERO_FILTER,
+                                                   clear=PLAIN_FILTERS, state=state)
+                    if not hero_done:
+                        hero_try = False
+                        if state.get("no_builder"):
+                            break                   # no free builder: the plain attempt would meet the same notice
+                if not hero_done and not _first_row_upgrade(scr, cfg, tab, log, check, sleep):
                     break
                 started = True
-                log(f"Mejora lanzada ({slot})")
+                log(f"Mejora lanzada ({slot}{', heroe' if hero_done else ''})")
                 now = vision.free_count(scr.grab(), cfg.regions[count_region])
                 if now is None:                       # blurry for a moment right after the confirm: look again
                     sleep(0.6)

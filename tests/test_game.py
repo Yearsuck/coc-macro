@@ -212,3 +212,14 @@ def test_upgrade_surplus_runs_the_busy_routine_for_builders_only_leaving_one(tmp
     monkeypatch.setattr(upgrades, "upgrade_busy", fake)
     assert g.upgrade("surplus", lambda m: None, lambda: None) is True
     assert seen == {"only": ("builders",), "keep": {"builders": 1}}
+
+
+def test_upgrade_busy_passes_the_hero_toggle_but_the_walls_surplus_does_not(tmp_path, monkeypatch):
+    from cocmacro import upgrades
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    calls = []
+    monkeypatch.setattr(upgrades, "upgrade_busy", lambda *a, **kw: calls.append(kw) or True)
+    g.cfg.prioritize_heroes = True
+    g.upgrade("busy", lambda s: None, lambda: None)
+    g.upgrade("surplus", lambda s: None, lambda: None)
+    assert calls[0].get("heroes") is True and "heroes" not in calls[1]

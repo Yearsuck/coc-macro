@@ -148,7 +148,7 @@ class RealGame:
         if kind == "walls":
             return upgrades.upgrade_walls(scr, self.cfg, log, check, time.sleep)
         if kind == "busy":
-            return upgrades.upgrade_busy(scr, self.cfg, log, check, time.sleep)
+            return upgrades.upgrade_busy(scr, self.cfg, log, check, time.sleep, heroes=self.cfg.prioritize_heroes)
         if kind == "surplus":      # walls mode: cheapest permanent upgrades for every builder beyond the one reserved
             return upgrades.upgrade_busy(scr, self.cfg, log, check, time.sleep,
                                          only=("builders",), keep={"builders": 1})
