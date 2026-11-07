@@ -20,18 +20,19 @@ WIDTH = 880
 REFRESH_EVERY = 40          # polls (about 2 s) between status refreshes
 
 
-class App:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        root.title(f"CoC Macro v{__version__}")
-        root.configure(bg=BG)
-        root.minsize(WIDTH, 0)
-        root.resizable(False, True)
-        theme.apply_ttk_style(root)
-        self.cfg = config.load(CFG_PATH)
+class AccountPanel(tk.Frame):
+    """All per-account state and UI: one panel == one account / one Clash window."""
+
+    def __init__(self, parent, app, cfg_path: Path, index: int = 1):
+        super().__init__(parent, bg=BG)
+        self.app = app
+        self.root = app.root
+        self.cfg_path = cfg_path
+        self.index = index
+        self.cfg = config.load(self.cfg_path)
         if defaults.apply(self.cfg, TPL_DIR):
             DATA.mkdir(parents=True, exist_ok=True)
-            config.save(self.cfg, CFG_PATH)
+            config.save(self.cfg, self.cfg_path)
         self.q: queue.Queue = queue.Queue()
         self.stop_ev = threading.Event()
         self.bot: bot.Bot | None = None
@@ -43,20 +44,13 @@ class App:
         self._build()
         self.refresh_recordings()
         self.refresh_state()
-        self.unregister = hotkeys.start(lambda: self.q.put(("stop", None)),
-                                        lambda: self.q.put(("end_record", None)))
-        root.protocol("WM_DELETE_WINDOW", self.close)
-        if getattr(sys, "frozen", False):
-            updater.cleanup_old(Path(sys.executable))
-        if self.cfg.auto_check_updates:
-            threading.Thread(target=self._check_update, args=(False,), daemon=True).start()
         self._after_id = self.root.after(50, self._poll)
 
     # -- layout --------------------------------------------------------
     def _build(self):
         pad = {"padx": 24}
         self._header().pack(fill="x", pady=(20, 0), **pad)
-        body = tk.Frame(self.root, bg=BG)
+        body = tk.Frame(self, bg=BG)
         body.pack(fill="x", pady=(16, 0), **pad)
         body.columnconfigure(0, weight=1)
         self.left = tk.Frame(body, bg=BG)
@@ -65,14 +59,14 @@ class App:
         self._setup_card(self.left)
         self._reading_card(self.left)
         self._rules_card(body).grid(row=0, column=1, sticky="nsew", padx=(16, 0))
-        self.prep = self._prep_card(self.root)
+        self.prep = self._prep_card(self)
         self.prep.pack(fill="x", pady=(16, 0), **pad)
-        self.log_card = self._log_card(self.root)
+        self.log_card = self._log_card(self)
         self.log_card.pack(fill="both", expand=True, pady=(16, 0), **pad)
-        self._footer(self.root).pack(fill="x", pady=(10, 14), **pad)
+        self._footer(self).pack(fill="x", pady=(10, 14), **pad)
 
     def _header(self) -> tk.Frame:
-        f = tk.Frame(self.root, bg=BG)
+        f = tk.Frame(self, bg=BG)
         title = tk.Frame(f, bg=BG)
         title.pack(side="left")
         theme.label(title, "CoC Macro", 17, True, bg=BG).pack(side="left")
@@ -290,7 +284,7 @@ class App:
         f = tk.Frame(parent, bg=BG)
         theme.label(f, "F8 para todo · F9 termina una grabación", 8, fg=MUTED, bg=BG).pack(side="left")
         theme.button(f, "Buscar actualizaciones", lambda: threading.Thread(
-            target=self._check_update, args=(True,), daemon=True).start(), "secondary", 8, padx=10, pady=2
+            target=self.app.check_update, args=(True,), daemon=True).start(), "secondary", 8, padx=10, pady=2
         ).pack(side="right")
         self.auto_upd = tk.BooleanVar(value=self.cfg.auto_check_updates)
         tk.Checkbutton(f, text="Buscar actualizaciones al abrir", variable=self.auto_upd, bg=BG, fg=MUTED,
@@ -428,9 +422,9 @@ class App:
                 elif kind == "reading":
                     self._show_reading(val)
                 elif kind == "update":
-                    self._offer_update(*val)
+                    self.app.offer_update(*val)
                 elif kind == "quit":
-                    self.close()
+                    self.app.close()
                 elif kind.startswith("ov_"):
                     self._overlay_event(kind, val)
         except queue.Empty:
@@ -468,7 +462,7 @@ class App:
         self.cfg.prioritize_heroes = self.hero_var.get()
         self.cfg.auto_check_updates = self.auto_upd.get()
         DATA.mkdir(exist_ok=True)
-        config.save(self.cfg, CFG_PATH)
+        config.save(self.cfg, self.cfg_path)
         return True
 
     def _worker(self, fn):
@@ -545,7 +539,7 @@ class App:
             if rec.events:
                 recorder.save_recording(rec, REC_DIR)
                 self.cfg.deployment = rec.name
-                config.save(self.cfg, CFG_PATH)
+                config.save(self.cfg, self.cfg_path)
                 self.refresh_recordings()
                 self.log(f"Guardado '{rec.name}' ({len(rec.events)} eventos)")
             else:
@@ -600,7 +594,7 @@ class App:
             self.q.put(("ov_guide", None))
             self.q.put(("ov_saved", (name, self.cfg.regions[name])))
         DATA.mkdir(exist_ok=True)
-        config.save(self.cfg, CFG_PATH)
+        config.save(self.cfg, self.cfg_path)
 
     def _overlay_event(self, kind: str, val):
         try:
@@ -635,20 +629,55 @@ class App:
             self.log(f"Lectura: {vals} · reloj {left}")
         self._worker(job)
 
+    def dispose(self):
+        """Stop timers and the bot; leaves hotkeys and the Tk root alone."""
+        self.stop_ev.set()
+        if self._after_id:
+            self.root.after_cancel(self._after_id)
+
+
+class App:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        root.title(f"CoC Macro v{__version__}")
+        root.configure(bg=BG)
+        root.minsize(WIDTH, 0)
+        root.resizable(False, True)
+        theme.apply_ttk_style(root)
+        self.panel = AccountPanel(root, self, CFG_PATH, 1)
+        self.panel.pack(fill="both", expand=True)
+        self.panels = [self.panel]
+        self.unregister = hotkeys.start(self._hotkey_stop, self._hotkey_end_record)
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        if getattr(sys, "frozen", False):
+            updater.cleanup_old(Path(sys.executable))
+        if self.panel.cfg.auto_check_updates:
+            threading.Thread(target=self.check_update, args=(False,), daemon=True).start()
+
+    # -- hotkeys (they run on the listener thread: only post to the Tk thread's queues) ----------
+    def _hotkey_stop(self):
+        for p in self.panels:
+            p.q.put(("stop", None))
+
+    def _hotkey_end_record(self):
+        for p in self.panels:
+            if p.recorder is not None:
+                p.q.put(("end_record", None))
+
     # -- updates -------------------------------------------------------
-    def _check_update(self, manual: bool):
+    def check_update(self, manual: bool):
         try:
             info = updater.check(__version__)
         except Exception as e:  # offline, rate limited...: only bother the user if they asked
             if manual:
-                self.log(f"No se pudo comprobar actualizaciones: {e}")
+                self.panel.log(f"No se pudo comprobar actualizaciones: {e}")
             return
         if info:
-            self.q.put(("update", (info, manual)))
+            self.panel.q.put(("update", (info, manual)))
         elif manual:
-            self.log(f"Estas al dia (v{__version__})")
+            self.panel.log(f"Estas al dia (v{__version__})")
 
-    def _offer_update(self, info: "updater.UpdateInfo", manual: bool):
+    def offer_update(self, info: "updater.UpdateInfo", manual: bool):
         if not messagebox.askyesno(
                 "Actualizacion",
                 f"Hay una version nueva: v{info.version} (tienes v{__version__}).\n\n"
@@ -656,10 +685,10 @@ class App:
                 "¿Instalarla ahora?"):
             return
         if not getattr(sys, "frozen", False):
-            self.log("Estas ejecutando desde el codigo: actualiza con git pull")
+            self.panel.log("Estas ejecutando desde el codigo: actualiza con git pull")
             return
-        if self.busy:
-            self.log("Para el bot antes de actualizar")
+        if any(p.busy for p in self.panels):
+            self.panel.log("Para el bot antes de actualizar")
             return
 
         def job():
@@ -670,20 +699,19 @@ class App:
             def progress(n):
                 if n - last[0] >= 10_000_000 or (info.size and n >= info.size):
                     last[0] = n
-                    self.log(f"Descargando... {n // 1_000_000} MB")
-            self.log(f"Descargando v{info.version}...")
+                    self.panel.log(f"Descargando... {n // 1_000_000} MB")
+            self.panel.log(f"Descargando v{info.version}...")
             updater.download(info, dest, progress=progress)
-            self.log("Hash correcto. Instalando y reiniciando...")
+            self.panel.log("Hash correcto. Instalando y reiniciando...")
             updater.apply_update(dest, exe)
-            self.q.put(("quit", None))
-        self._worker(job)
+            self.panel.q.put(("quit", None))
+        self.panel._worker(job)
 
     def dispose(self):
-        """Stop timers, hotkeys and the bot; leaves the Tk root alone (tests reuse one)."""
-        self.stop_ev.set()
+        """Stop timers, hotkeys and every panel; leaves the Tk root alone (tests reuse one)."""
+        for p in self.panels:
+            p.dispose()
         self.unregister()
-        if self._after_id:
-            self.root.after_cancel(self._after_id)
 
     def close(self):
         self.dispose()
