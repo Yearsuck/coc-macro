@@ -1,107 +1,110 @@
-# Modos: parar con depósitos llenos, mejora de muros, constructores ocupados
+# Modes: stop when storages full, wall upgrades, busy builders
 
-Fecha: 2026-11-05. Estado: borrador para aprobar. **[mi decisión]** = lo decidí yo, no el usuario.
+Date: 2026-11-05. Status: draft for approval. **[my decision]** = decided by me, not the user.
 
-## Intención
+## Intent
 
-Hoy el bot solo ataca en bucle. El usuario quiere que el tiempo de farmeo sirva también para gastar
-lo farmeado: parar cuando ya no cabe más botín y usar los constructores libres entre ataques
-(muros, o la mejora permanente más barata).
+Currently the bot only loops attacks. The user wants farming time to also spend what was farmed:
+stop when no more loot fits and make use of free builders between attacks (walls, or the cheapest
+permanent upgrade).
 
-## Objetivos
+## Goals
 
-1. **Parar con depósitos llenos** (casilla, activable): antes de cada búsqueda, si los depósitos de
-   arriba a la derecha están llenos, no se ataca.
-2. **Modo muros**: atacar; al volver a la aldea, si hay constructor libre, mejorar muros y volver a atacar.
-3. **Modo constructores ocupados**: atacar hasta depósitos llenos o hasta que algo esté libre
-   (constructor, investigador o mascota); entonces mejorar y volver a atacar.
-4. Los modos son excluyentes y elegibles desde la ventana (ninguno = comportamiento actual).
-5. **Nada de lo que funciona hoy se rompe**: sin modo activo, el ciclo de ataque es idéntico.
+1. **Stop when storages full** (checkbox, toggleable): before each search, if storages at the top
+   right are full, do not attack.
+2. **Walls mode**: attack; upon returning to the village, if a builder is free, upgrade walls and resume attacking.
+3. **Busy builders mode**: attack until storages are full or something is free (builder, researcher,
+   or pet); then upgrade and resume attacking.
+4. Modes are mutually exclusive and selectable from the window (none = current behaviour).
+5. **Nothing currently working is broken**: without an active mode, the attack cycle is identical.
 
-## No objetivos / antiobjetivos
+## Non-goals / anti-goals
 
-- No entrenar tropas, no donar, no elegir qué construir salvo lo descrito.
-- No gastar gemas jamás. Si un botón pide gemas, parar y avisar.
-- No clicar a ciegas: ante pantalla no reconocida, parar y avisar (como el bot actual).
-- Parar con F8 sigue funcionando en cualquier punto de las rutinas nuevas.
+- Do not train troops, donate, or choose what to build except as described.
+- Never spend gems. If a button prompts for gems, stop and alert.
+- Do not click blindly: on an unrecognized screen, stop and alert (same as current bot).
+- Stopping with F8 continues to work at any point in the new routines.
 
-## Hechos medidos en el juego real (cuenta secundaria, ventana 1296x729, 2026-11-05)
+## Facts measured in the real game (secondary account, window 1296x729, 2026-11-05)
 
-- Depósitos arriba a la derecha: oro (y~31), elixir (y~73), elixir oscuro (y~115), barra detrás de la cifra.
-- Contadores sobre «Construir»: constructores `0/7` (x~1198,y~587) e investigadores `0/2` (x~1250,y~587).
-  Se asume formato libres/total.
-- Menú Construir (botón x~0.945,y~0.905; cerrar X x~0.984,y~0.032): abajo cuatro contadores
-  (constructores, investigadores, yunque, mascotas `0/1`). Filtro: botón arriba-izquierda
-  (x~0.7595,y~0.032) con Recurso (oro/elixir/oscuro), Tipo (Ejército, Defensa, Héroe, Recurso, Nuevo,
-  Permanente) y Orden (Coste máx., Coste mín.). **El juego recuerda el último filtro**: el bot debe
-  fijar Permanente + Coste mín. cada vez.
-- Tras cerrar un menú, la cámara queda alejada mostrando toda la aldea; el bloque de muros está arriba
-  al centro. Click en el borde inferior del bloque (~0.585,0.335 relativo) selecciona un muro.
-- Panel de muro seleccionado (una vez): `Infor.`, `Marcar fila`, `Mejorar más`, Mejorar oro, Mejorar elixir.
-  Tras «Mejorar más»: `Eliminar muro (-1)`, `Añadir muro (+10)`, `Añadir muro (+1)`, Mejorar oro, Mejorar elixir.
-  Título «Muro (Nivel N)». Los costes salen en rojo cuando no se pueden pagar.
-- Nivel máximo de muro: 19. Cuando no queda nada por mejorar el botón desaparece (pero eso no prueba que
-  se esté en el máximo, ver Modo muros).
-- Los muros del bloque tienen niveles mezclados (visto 16 y 17). Los de más nivel están abajo; el usuario
-  empieza siempre por abajo y sube.
+- Storages top right: gold (y~31), elixir (y~73), dark elixir (y~115), bar behind digits.
+- Counters above `Construir` (Build): builders `0/7` (x~1198, y~587) and researchers `0/2` (x~1250, y~587).
+  Assumed format free/total.
+- `Construir` menu (button x~0.945, y~0.905; close X x~0.984, y~0.032): four counters at the bottom
+  (builders, researchers, forge (anvil), pets `0/1`). Filter: button top-left (x~0.7595, y~0.032) with
+  `Recurso` (Resource) (gold/elixir/dark), `Tipo` (Type) (`Ejército` (Army), `Defensa` (Defense),
+  `Héroe` (Hero), `Recurso` (Resource), `Nuevo` (New), `Permanente` (Permanent)), and `Orden` (Sort)
+  (`Coste máx.` (Max cost), `Coste mín.` (Min cost)). **The game remembers the last filter**: the
+  bot must set `Permanente` + `Coste mín.` each time.
+- After closing a menu, the camera remains zoomed out showing the entire village; the wall block is top
+  center. Clicking the bottom edge of the block (~0.585, 0.335 relative) selects a wall.
+- Selected wall panel (once): `Infor.` (Info), `Marcar fila` (Row select), `Mejorar más` (Upgrade more),
+  `Mejorar` (Upgrade) gold, `Mejorar` elixir.
+  After `Mejorar más`: `Eliminar muro (-1)` (Remove wall (-1)), `Añadir muro (+10)` (Add wall (+10)),
+  `Añadir muro (+1)` (Add wall (+1)), `Mejorar` gold, `Mejorar` elixir.
+  Title "Muro (Nivel N)" ("Wall (Level N)"). Costs appear in red when they cannot be paid.
+- Maximum wall level: 19. When nothing remains to upgrade the button disappears (but that does not prove
+  it is at max level, see Walls mode).
+- Walls in the block have mixed levels (observed 16 and 17). Higher level walls are at the bottom; the user
+  always starts from the bottom and works upward.
 
-## Parar con depósitos llenos
+## Stop when storages full
 
-- Leer la barra de oro y elixir (relleno completo = lleno). **[mi decisión]**: se para cuando **ambos**
-  están llenos (el ataque exige ambos mínimos, así que un depósito lleno solo no impide farmear el otro).
-- Se comprueba en la pantalla de inicio, antes de Batalla. Si están llenos: no atacar, esperar
-  (comprobar cada pocos segundos) mientras el bot siga activo, o parar con aviso. **[mi decisión]**: esperar
-  y avisar en el log; en modo muros / ocupados llenos significa «es hora de gastar».
-- Calibración: región de cada barra en `config.regions`, con valor por defecto medido.
+- Read gold and elixir bars (complete fill = full). **[my decision]**: stops when **both** are full
+  (attacking requires both minimums, so one full storage alone does not prevent farming the other).
+- Checked on the home screen, before `Batalla` (Battle). If full: do not attack, wait (polling every
+  few seconds) while the bot remains active, or stop with an alert. **[my decision]**: wait and alert in
+  the log; in walls / busy modes, full storages mean "time to spend".
+- Calibration: region of each bar in `config.regions`, with measured default values.
 
-## Modo muros
+## Walls mode
 
-Tras cada ataque, en la aldea:
-1. Leer el contador de constructores. Si libres == 0, seguir atacando. Si depósitos llenos y libres == 0,
-   esperar a que haya uno (comprobando cada pocos segundos).
-2. Si libres >= 1: **rutina de muros** (abajo), luego abrir Construir (cierra la selección y reinicia la
-   cámara), cerrarlo, y volver a atacar.
+After each attack, in the village:
+1. Read the builders counter. If free == 0, keep attacking. If storages full and free == 0, wait until
+   one frees up (polling every few seconds).
+2. If free >= 1: **wall routine** (below), then open `Construir` (closes selection and resets camera),
+   close it, and resume attacking.
 
-**Rutina de muros** (por cada recurso, oro y luego elixir):
-1. Pulsar un muro del borde inferior del bloque (punto fijo, calibrable).
-2. Leer el título (nivel). Si es 19 o no hay panel de muro: terminar el recurso.
-3. Pulsar «Mejorar más»; pulsar «+10» repetidamente y luego «+1» mientras el coste del recurso no esté en rojo.
-4. Al ponerse en rojo: «Eliminar muro» una vez; comprobar que el coste ya no está en rojo.
-5. Pulsar el botón Mejorar del recurso; confirmar si el juego lo pide (nunca si pide gemas).
-6. Repetir para el otro recurso (reseleccionar un muro; tras mejorar, la selección suele perderse).
-7. Detenerse si ya no hay constructor libre (releer contador) o no se logra seleccionar un muro.
+**Wall routine** (for each resource, gold then elixir):
+1. Click a wall at the bottom edge of the block (fixed point, calibratable).
+2. Read title (level). If 19 or no wall panel: finish this resource.
+3. Click `Mejorar más`; click `+10` repeatedly and then `+1` while the resource cost is not red.
+4. When it turns red: click `Eliminar muro` once; verify cost is no longer red.
+5. Click the resource `Mejorar` button; confirm if the game prompts (never if gems are requested).
+6. Repeat for the other resource (reselect a wall; after upgrading, selection is usually lost).
+7. Stop if no builder is free (re-read counter) or failing to select a wall.
 
-**[mi decisión]** Solo se guarda un reintento por paso; si falla dos veces, abortar la rutina, loguear y seguir
-atacando (no parar el bot entero por esto).
+**[my decision]** Only one retry is kept per step; if it fails twice, abort routine, log, and continue
+attacking (do not stop the entire bot for this).
 
-## Modo constructores ocupados
+## Busy builders mode
 
-Tras cada ataque, si depósitos llenos **o** hay algo libre (constructor, investigador o mascota):
-1. Abrir Construir, fijar Tipo = Permanente, Orden = Coste mín., cerrar el selector.
-2. Pulsar la primera entrada de la lista. Confirmar si lo pide (nunca gemas).
-3. Cerrar el menú y volver a atacar.
-Si la primera entrada no se puede pagar (coste en rojo) no se pulsa; se loguea y se vuelve a atacar.
-**[mi decisión]**: «algo libre» se lee de los contadores del menú Construir (constructores, investigadores,
-mascotas), no solo del de la aldea.
+After each attack, if storages full **or** anything is free (builder, researcher, or pet):
+1. Open `Construir`, set `Tipo` = `Permanente`, `Orden` = `Coste mín.`, close filter selector.
+2. Click the first entry in the list. Confirm if prompted (never gems).
+3. Close menu and resume attacking.
+If the first entry cannot be paid (cost in red), do not click; log and resume attacking.
+**[my decision]**: "anything free" is read from the counters inside the `Construir` menu (builders,
+researchers, pets), not just from the village screen.
 
-## Estructura (propuesta)
+## Structure (proposed)
 
-- `cocmacro/storage.py`: lectura de barras de depósitos (puro sobre un frame).
-- `cocmacro/builders.py`: lectura de contadores libres/total y detección de «coste en rojo» (puro sobre frames).
-- `cocmacro/upgrades.py`: rutinas de muros y de constructores, sobre el protocolo `Game`.
-- `bot.py`: tras cada ataque, un gancho por modo. Sin modo activo, ni se llama.
-- `config.py`: `mode` (`none`/`walls`/`busy`), `stop_when_full`, posiciones nuevas con defaults.
-- `gui.py`: selector de modo y casilla; sin cambios en lo existente.
-- Plantillas nuevas (botones del panel de muro, menú Construir, filtro) cortadas de capturas reales.
+- `cocmacro/storage.py`: reading storage bars (pure on a frame).
+- `cocmacro/builders.py`: reading free/total counters and detecting "red cost" (pure on frames).
+- `cocmacro/upgrades.py`: wall and builder routines, over the `Game` protocol.
+- `bot.py`: after each attack, one hook per mode. Without an active mode, it is not even called.
+- `config.py`: `mode` (`none`/`walls`/`busy`), `stop_when_full`, new positions with defaults.
+- `gui.py`: mode selector and checkbox; no changes to existing code.
+- New templates (wall panel buttons, `Construir` menu, filter) cut from real captures.
 
-## Verificación
+## Verification
 
-- Tests unitarios con capturas de fixtures enmascaradas para lectura de barras, contadores y «rojo».
-- Bot probado con `Game` falso (cubre los ramales: libre/no libre, lleno/no lleno, fallo de selección).
-- **Validación en la cuenta secundaria**: yo mismo ejecuto cada rutina con el juego real, mirando capturas
-  paso a paso (primero sin gastar: hasta justo antes de «Mejorar»; luego una mejora real supervisada).
+- Unit tests with masked fixture captures for reading bars, counters, and "red".
+- Bot tested with fake `Game` (covers branches: free/busy, full/not full, selection failure).
+- **Validation on the secondary account**: I run each routine myself on the real game, inspecting captures
+  step by step (first without spending: up to just before `Mejorar`; then one supervised real upgrade).
 
-## Fuera de alcance de este documento / por calibrar en las pruebas
+## Out of scope for this document / to calibrate during testing
 
-- Coordenadas exactas de cada botón y de las barras (se miden en el juego real).
-- Qué hace el bot si el bloque de muros cambia de sitio (se asume cámara estándar tras cerrar un menú).
+- Exact coordinates of each button and bars (measured in real game).
+- What the bot does if the wall block moves (standard camera after closing a menu is assumed).
