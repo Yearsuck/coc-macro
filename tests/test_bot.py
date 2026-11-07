@@ -1,7 +1,9 @@
 import threading
 
+import pytest
+
 from cocmacro import config
-from cocmacro.bot import Bot
+from cocmacro.bot import Bot, RELOAD_WAIT_S, _Abort
 from cocmacro.winctl import WindowNotFound
 
 LOW = (100_000, 100_000)
@@ -237,3 +239,192 @@ def test_star_bonus_popup_after_victory_is_dismissed():
     assert bot.run_once() is True
     assert g.dismissed == 1
     assert any("aviso" in m for m in logs)
+
+
+class ReloadGame(FakeGame):
+    """FakeGame with the optional reload_if_disconnected method for inactivity dialogs."""
+
+    def __init__(self, reloads=(True, False), home_after=2, **kw):
+        super().__init__(kw.pop("reads", [GOOD, GOOD]), **kw)
+        self.reloads = list(reloads)
+        self.reload_calls = 0
+        self.home_after = home_after
+        self.home_polls = 0
+        self.screen = "disconnected" if home_after > 0 else "home"
+
+    def reload_if_disconnected(self):
+        self.reload_calls += 1
+        pressed = self.reloads.pop(0) if self.reloads else False
+        if pressed:
+            self.clicks.append("reload_inactive")      # only a real press counts as a click
+        return pressed
+
+    def screen_is(self, name):
+        if name == "home":
+            self.home_polls += 1
+            if self.home_polls > self.home_after:
+                self.screen = "home"
+        return super().screen_is(name)
+
+
+def test_reload_if_disconnected_reloads_and_waits_for_home():
+    g = ReloadGame(reloads=[True, False], home_after=2)
+    bot, logs, _ = make(g)
+    assert bot._reload_if_disconnected() is True
+    assert g.reload_calls == 1
+    assert g.clicks == ["reload_inactive"]
+    assert any("recargo" in m.lower() for m in logs)
+
+
+def test_reload_if_disconnected_false_when_not_disconnected_or_method_missing():
+    # Game lacks the method
+    g_lacks = FakeGame([])
+    bot_lacks, logs_lacks, _ = make(g_lacks)
+    assert bot_lacks._reload_if_disconnected() is False
+    assert logs_lacks == []
+
+    # Game has method but returns False
+    g_false = ReloadGame(reloads=[False])
+    bot_false, logs_false, _ = make(g_false)
+    assert bot_false._reload_if_disconnected() is False
+    assert g_false.reload_calls == 1
+    assert logs_false == []
+
+
+def test_reload_if_disconnected_dry_run_never_calls_game():
+    g = ReloadGame(reloads=[True])
+    bot, logs, _ = make(g, dry_run=True)
+    assert bot._reload_if_disconnected() is False
+    assert g.reload_calls == 0
+    assert g.clicks == []
+    assert logs == []
+
+
+def test_reload_if_disconnected_never_home_aborts():
+    g = ReloadGame(reloads=[True], home_after=999999)
+    slept = []
+    bot, logs, _ = make(g)
+    bot.sleep = slept.append
+
+    with pytest.raises(_Abort, match="La aldea no cargo tras recargar"):
+        bot._reload_if_disconnected()
+    assert sum(slept) >= RELOAD_WAIT_S
+    assert any("recargo" in m.lower() for m in logs)
+
+
+def test_wait_if_full_reloads_at_start_and_each_iteration():
+    class FullReloadGame(ReloadGame):
+        def __init__(self):
+            super().__init__(reloads=[True, False, False, False], home_after=0)
+            self.full_polls = 0
+
+        def storages_full(self):
+            self.full_polls += 1
+            return self.full_polls <= 2
+
+    g = FullReloadGame()
+    bot, logs, _ = make(g)
+    bot.cfg.stop_when_full = True
+    bot.wait_if_full()
+
+    # one look before the loop + one per iteration (_storages_full reads the bars twice to decide, so one iteration)
+    assert g.reload_calls == 2
+    # Only the reload press was sent, no upgrade or attack clicks
+    assert g.clicks == ["reload_inactive"]
+
+
+def test_run_reloads_at_top_of_iteration():
+    g = ReloadGame(reloads=[True, False], home_after=0)
+    bot, logs, stop = make(g)
+
+    calls = []
+    orig_reload = g.reload_if_disconnected
+    def reload_and_record():
+        res = orig_reload()
+        calls.append("reloaded")
+        return res
+    g.reload_if_disconnected = reload_and_record
+    g.close_menu = lambda: (calls.append("close_menu") or stop.set() or False)
+
+    bot.run()
+    assert calls[:2] == ["reloaded", "close_menu"]
+    assert g.reload_calls >= 1
+    assert "reload_inactive" in g.clicks
+    assert any("recargo" in m.lower() for m in logs)
+
+
+def test_open_search_reloads_on_retry_and_retries_clicks():
+    class SearchReloadGame(FakeGame):
+        def __init__(self):
+            super().__init__(reads=[GOOD, GOOD], damages=[60])
+            self.reload_called = 0
+            self.dialog_up = False
+
+        def click_button(self, name):
+            super().click_button(name)
+            if name == "attack" and "reload_inactive" not in self.clicks:
+                self.dialog_up = True
+                self.screen = "disconnected"
+
+        def reload_if_disconnected(self):
+            self.reload_called += 1
+            if self.dialog_up:
+                self.dialog_up = False
+                self.clicks.append("reload_inactive")
+                self.screen = "home"
+                return True
+            return False
+
+        def screen_is(self, name):
+            if self.dialog_up and name == "scout":
+                return False
+            if not self.dialog_up and self.reload_called > 0 and name == "scout":
+                if self.clicks.count("attack") >= 2:
+                    return True
+            return super().screen_is(name)
+
+    g = SearchReloadGame()
+    bot, logs, _ = make(g)
+    bot._open_search()
+
+    assert g.reload_called >= 1
+    assert "reload_inactive" in g.clicks
+    assert g.clicks == ["battle", "find", "attack", "reload_inactive", "battle", "find", "attack"]
+    assert any("repito batalla" in m.lower() for m in logs)
+
+
+def test_reload_if_disconnected_catches_generic_exception():
+    g = ReloadGame()
+    def explode():
+        raise RuntimeError("boom")
+    g.reload_if_disconnected = explode
+    bot, logs, _ = make(g)
+    assert bot._reload_if_disconnected() is False
+    assert any("no pude comprobar la sesion: boom" in m.lower() for m in logs)
+
+
+def test_reload_if_disconnected_reraises_window_exceptions():
+    g = ReloadGame()
+    def boom():
+        raise WindowNotFound("perdida")
+    g.reload_if_disconnected = boom
+    bot, logs, _ = make(g)
+    with pytest.raises(WindowNotFound):
+        bot._reload_if_disconnected()
+
+
+def test_reload_if_disconnected_aborts_if_stopped():
+    g = ReloadGame(reloads=[True], home_after=10)
+    stop = threading.Event()
+    bot, logs, _ = make(g, stop=stop)
+    stop.set()
+    with pytest.raises(_Abort, match="Detenido"):
+        bot._reload_if_disconnected()
+
+
+def test_no_reload_press_in_dry_run_full_cycle():
+    g = ReloadGame(reloads=[True])
+    bot, logs, _ = make(g, dry_run=True)
+    assert bot.run_once() is True
+    assert g.reload_calls == 0
+    assert "reload_inactive" not in g.clicks
