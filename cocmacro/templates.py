@@ -47,7 +47,8 @@ def score(frame: np.ndarray, name: str, dir: Path) -> tuple[float, tuple[float, 
 # Pairs that differ only in colour or in one word (selected / not selected, Coste min / max) score
 # 0.78-0.79 against each other, so they need a stricter cut than ordinary buttons.
 STRICT = 0.88
-STRICT_NAMES = {"filter_permanent", "filter_permanent_on", "filter_cost_min", "filter_cost_min_on"}
+STRICT_NAMES = {"filter_permanent", "filter_permanent_on", "filter_cost_min", "filter_cost_min_on",
+                "filter_hero", "filter_hero_on", "skip_arrojatroncos", "skip_destructor", "skip_tiradora"}
 
 
 def threshold_for(name: str) -> float:
