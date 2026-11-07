@@ -92,15 +92,29 @@ def test_why_not_reports_template_scores(tmp_path, monkeypatch):
     assert "falta" in g2.why_not("scout")                      # no template saved at all
 
 
-def test_storages_full_needs_both_and_never_guesses(tmp_path, monkeypatch):
+def test_storages_full_needs_all_and_never_guesses(tmp_path, monkeypatch):
     from cocmacro import vision
     g, _ = make(tmp_path, monkeypatch, "f004.png")
-    g.cfg.regions.update({"storage_gold": (0.8, 0.03, 0.95, 0.06), "storage_elixir": (0.8, 0.08, 0.95, 0.11)})
-    for gold, elixir, expected in ((True, True, True), (True, False, False), (False, True, False),
-                                   (True, None, None), (None, False, False), (None, None, None)):
+    g.cfg.regions.update({"storage_gold": (0.8, 0.03, 0.95, 0.06), "storage_elixir": (0.8, 0.08, 0.95, 0.11),
+                          "storage_dark": (0.85, 0.14, 0.97, 0.18)})
+    cases = ((True, True, True, True), (True, False, True, False), (False, True, True, False),
+             (True, None, True, None), (None, False, True, False), (None, None, None, None),
+             (True, True, False, False),     # dark elixir not full blocks the wait
+             (True, True, None, True))       # dark elixir unreadable / absent: gold and elixir decide
+    for gold, elixir, dark, expected in cases:
         answers = iter((gold, elixir))
         monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: next(answers))
+        monkeypatch.setattr(vision, "dark_storage_full", lambda frame, region, d=dark: d)
         assert g.storages_full() is expected
+
+
+def test_storages_full_without_dark_region_ignores_it(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.regions.pop("storage_dark", None)
+    answers = iter((True, True))
+    monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: next(answers))
+    assert g.storages_full() is True
 
 
 def test_free_slots_reads_both_counters(tmp_path, monkeypatch):

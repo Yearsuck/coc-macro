@@ -31,6 +31,7 @@ REGIONS = {
     "tab_count_builders": (0.739, 0.948, 0.787, 0.985), "tab_count_researchers": (0.809, 0.948, 0.857, 0.985),
     "tab_count_pets": (0.947, 0.948, 0.987, 0.985), "upgrade_cost": (0.66, 0.84, 0.72, 0.90),
     "storage_gold": (0.815, 0.030, 0.950, 0.060), "storage_elixir": (0.815, 0.085, 0.950, 0.115),
+    "storage_dark": (0.858, 0.143, 0.968, 0.178),
 }
 
 
