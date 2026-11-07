@@ -509,3 +509,64 @@ def test_claim_and_release_are_safe_from_several_threads(app):
     owner = app._owned[99]
     winners = {p for p in (p1, p2) if app.window_in_use_by_other(p, 99) is False}
     assert winners == {owner}                              # exactly one tab owns it
+
+
+def test_the_window_is_never_taller_than_the_screen_and_keeps_its_add_button(app, monkeypatch):
+    """On a 816 px high screen the old window (about 1080 px) hid '+ Añadir cuenta' below the screen."""
+    monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 700)
+    app.panel._fit()
+    app.root.update()
+    height = int(app.root.geometry().split("+")[0].split("x")[1])
+    assert height <= 700 - gui.SCREEN_MARGIN
+    root_bottom = app.root.winfo_rooty() + app.root.winfo_height()
+    assert app.btn_add.winfo_ismapped()
+    assert app.btn_add.winfo_rooty() + app.btn_add.winfo_height() <= root_bottom + 2      # inside the window
+
+
+def test_content_taller_than_the_window_is_reachable_by_scrolling(app, monkeypatch):
+    monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 700)
+    panel = app.panel
+    panel._fit()
+    app.root.update()
+    assert panel.content.winfo_reqheight() > panel.canvas.winfo_height()                  # it does not fit
+    region = [float(v) for v in str(panel.canvas.cget("scrollregion")).split()]
+    assert region[3] >= panel.content.winfo_reqheight() - 1                               # but all of it scrolls
+    panel.canvas.yview_moveto(1.0)
+    app.root.update()
+    assert panel.canvas.yview()[1] == pytest.approx(1.0)                                   # the bottom is reachable
+
+
+class _Wheel:
+    def __init__(self, widget, delta):
+        self.widget, self.delta = widget, delta
+
+
+def test_the_wheel_scrolls_the_panel_but_not_over_the_log_or_a_dropdown(app, monkeypatch):
+    monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 700)
+    panel = app.panel
+    panel._fit()
+    app.root.update()
+    start = panel.canvas.yview()[0]
+    app._on_wheel(_Wheel(panel.content, -120))                      # wheel down over the page
+    app.root.update()
+    assert panel.canvas.yview()[0] > start
+    here = panel.canvas.yview()[0]
+    app._on_wheel(_Wheel(panel.logbox, -120))                        # over the log: the log takes it
+    app._on_wheel(_Wheel(panel.mode_combo, -120))                    # over a dropdown: the dropdown takes it
+    app.root.update()
+    assert panel.canvas.yview()[0] == here
+    app._on_wheel(_Wheel(panel.content, 1))                          # a gentle (touchpad) tick still scrolls
+    app.root.update()
+    assert panel.canvas.yview()[0] < here
+
+
+def test_a_wheel_event_from_nowhere_is_ignored(app):
+    app._on_wheel(_Wheel("not a widget", -120))                      # must not raise
+
+
+def test_a_tall_screen_keeps_the_natural_height(app, monkeypatch):
+    monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 5000)
+    app.panel._fit()
+    app.root.update()
+    height = int(app.root.geometry().split("+")[0].split("x")[1])
+    assert height == app.root.winfo_reqheight()
