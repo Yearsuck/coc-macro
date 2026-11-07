@@ -594,13 +594,6 @@ class AccountPanel(tk.Frame):
         self.mode, self.phase = "running", None
         self._show_reading({})
         self.refresh_state()
-        try:
-            others = winctl.overlapping_titles(self._find_window())
-        except Exception:
-            others = []
-        if others:
-            self.log("Aviso: esta ventana se solapa con " + ", ".join(others) + ". La app sube la ventana al frente "
-                     "para pulsar; para que no parpadeen, colocalas sin solaparse.")
 
         def job():
             try:
