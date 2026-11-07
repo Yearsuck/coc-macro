@@ -281,3 +281,24 @@ def test_first_upgrade_row_handles_a_thin_top_piece_and_the_end_of_the_list():
     unbroken = np.zeros((729, 1296, 3), dtype=np.uint8)
     unbroken[400:729, 1050:1280] = sand                # sand up to the end of the list area
     assert vision.first_upgrade_row(unbroken) is not None
+
+
+def _ui(name):
+    import cv2
+    from pathlib import Path
+    return cv2.imread(str(Path(__file__).parent / "fixtures" / "ui" / name))
+
+
+from cocmacro.defaults import REGIONS as _REGIONS
+DARK_REGION = _REGIONS["storage_dark"]
+
+
+def test_dark_storage_full_on_real_captures():
+    assert vision.dark_storage_full(_ui("storage_bars_full.png"), DARK_REGION) is True
+    assert vision.dark_storage_full(_ui("storage_bars_not_full.png"), DARK_REGION) is False
+    assert vision.dark_storage_full(_ui("storage_bars_half_full.png"), DARK_REGION) is False
+
+
+def test_dark_storage_full_invalid_inputs():
+    assert vision.dark_storage_full(None, DARK_REGION) is None
+    assert vision.dark_storage_full(np.zeros((100, 100, 3), np.uint8), (0.5, 0.5, 0.5, 0.5)) is None
