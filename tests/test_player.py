@@ -59,10 +59,10 @@ def test_the_input_lock_is_released_when_a_replay_raises():
         assert got is True
 
 
-def test_a_deployment_raises_its_window_above_a_covering_clash_window_first(monkeypatch):
+def test_a_deployment_marks_its_window_active_first(monkeypatch):
     from cocmacro import winctl
     events = []
-    monkeypatch.setattr(winctl, "raise_above_overlapping", lambda win: events.append("raise"))
+    monkeypatch.setattr(winctl, "activate_instance", lambda win: events.append("activate"))
     player.play(object(), _rec(2), threading.Event(), sleep=lambda s: None,
                 post=lambda *a: events.append("post"), post_wheel=lambda *a: None)
-    assert events == ["raise", "post", "post"]
+    assert events == ["activate", "post", "post"]

@@ -1,7 +1,8 @@
 """Win32 control of the Google Play Games window running Clash of Clans.
 
 Capture: PrintWindow(flag 2), works with the window behind others.
-Input: PostMessage mouse events with client coordinates, works without focus.
+Input: PostMessage mouse events with client coordinates; the target is first marked as the active
+instance with WM_ACTIVATE (activate_instance), because the host only forwards input to the active one.
 A minimized window has a 0x0 client area and cannot be captured, so it is restored without
 activating it and sent to the bottom of the z-order (restore_if_minimized).
 """
@@ -23,8 +24,7 @@ user32.SetProcessDPIAware()
 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL = 0x0200, 0x0201, 0x0202, 0x020A
 MK_LBUTTON = 1
 SW_SHOWNOACTIVATE = 4
-HWND_BOTTOM, HWND_TOP = 1, 0
-GW_HWNDNEXT, GW_HWNDPREV = 2, 3
+HWND_BOTTOM = 1
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 TITLE_PREFIX = "Clash of Clans"
 PROCESS_NAME = "crosvm"
@@ -139,24 +139,19 @@ def is_foreground(win: GameWindow) -> bool:
     return user32.GetForegroundWindow() == win.hwnd
 
 
-VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
-_focus_lock = threading.Lock()      # one window at a time takes the focus
-# Every Play Games window of the account lives in ONE crosvm process, so they share one input channel: a drag
-# posted to a window while another window is also being driven gets mixed up with it (live, two tabs: only one
-# of the two accounts managed to deploy its troops at a time). All posted input goes through this lock; a
-# deployment holds it for its whole replay, so the accounts take turns. Re-entrant: a routine that holds it
-# can still click.
+# All Play Games windows of the account are displays of ONE crosvm virtual machine and share one input channel.
+# Two things measured live on 2026-11-07 (two windows side by side, no overlap):
+#  1. a drag posted to a window while another window is also being driven gets mixed up with it, so every posted
+#     input goes through this lock; a deployment holds it for its whole replay and the accounts take turns.
+#     Re-entrant: a routine that holds it can still click.
+#  2. the host forwards posted mouse input only to the ACTIVE instance, whatever window it was posted to (a tap
+#     posted to the inactive window was received by the active one). The active instance follows WM_ACTIVATE,
+#     so before each burst the target is marked active (and the others inactive) with WM_ACTIVATE messages,
+#     which does not touch the user's real keyboard focus.
 _input_lock = threading.RLock()
 
-
-# Where a click lands is decided by what is VISIBLE at that screen pixel among the Clash windows, not by the window
-# the message is posted to (measured live 2026-11-07: a tap posted to the window behind was received by the window
-# in front, at the same screen position; a non-Clash app on top does not matter). So before sending input the
-# target window must not be covered by another Clash window.
 _GAMES_TTL = 3.0
-RAISE_SETTLE_S = 0.05
 _games_cache: tuple[float, list[int]] = (0.0, [])
-
 
 GAME_WINDOW_CLASS = "CROSVM_1"
 
@@ -187,68 +182,6 @@ def _game_hwnds() -> list[int]:
     return _games_cache[1]
 
 
-def _zorder_top_first() -> list[int]:
-    order, h = [], user32.GetTopWindow(None)
-    while h:
-        order.append(h)
-        h = user32.GetWindow(h, GW_HWNDNEXT)
-    return order
-
-
-def _rect_of(hwnd: int) -> tuple[int, int, int, int]:
-    r = wintypes.RECT()
-    user32.GetWindowRect(hwnd, ctypes.byref(r))
-    return r.left, r.top, r.right, r.bottom
-
-
-def _overlap(a, b) -> bool:
-    return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
-
-
-def covering_window(order: list[int], rects: dict[int, tuple], hwnd: int) -> int | None:
-    """`order`: Clash window handles, top of the z-order first. The highest Clash window that is above `hwnd`
-    and overlaps it, or None when `hwnd` is not covered by another Clash window."""
-    if hwnd not in order:
-        return None
-    for other in order[:order.index(hwnd)]:
-        if other in rects and hwnd in rects and _overlap(rects[other], rects[hwnd]):
-            return other
-    return None
-
-
-def raise_above_overlapping(win: GameWindow) -> bool:
-    """Put `win` directly above the highest Clash window that covers it, without activating it and without
-    passing over the user's other applications. True if it had to be raised."""
-    global _games_cache
-    hwnd = getattr(win, "hwnd", None)
-    if hwnd is None:
-        return False
-    games = _game_hwnds()
-    if hwnd not in games:                  # a window opened or re-created within the cache time: look again once
-        _games_cache = (0.0, [])
-        games = _game_hwnds()
-        if hwnd not in games:
-            return False
-    order = [h for h in _zorder_top_first() if h in games]
-    rects = {h: _rect_of(h) for h in order}
-    top = covering_window(order, rects, hwnd)
-    if top is None:
-        return False
-    above_top = user32.GetWindow(top, GW_HWNDPREV)
-    user32.SetWindowPos(hwnd, above_top or HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
-    time.sleep(RAISE_SETTLE_S)             # let the new order be applied before the game hit-tests the click
-    return True
-
-
-def overlapping_titles(win: GameWindow) -> list[str]:
-    """Titles of the other Clash windows whose area overlaps `win` (for a warning)."""
-    games = _game_hwnds()
-    if getattr(win, "hwnd", None) not in games:
-        return []
-    mine = _rect_of(win.hwnd)
-    return [_title(h) for h in games if h != win.hwnd and _overlap(_rect_of(h), mine)]
-
-
 @contextlib.contextmanager
 def exclusive_input(stop: threading.Event | None = None, poll: float = 0.2):
     """Hold the input channel. Yields True once it is held, or False if `stop` was set while waiting (the
@@ -265,31 +198,47 @@ def exclusive_input(stop: threading.Event | None = None, poll: float = 0.2):
             _input_lock.release()
 
 
-def _foreground(api, hwnd) -> None:
-    # a synthetic Alt press lets SetForegroundWindow through when another app owns the focus
-    api.keybd_event(VK_MENU, 0, 0, 0)
-    api.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
-    api.SetForegroundWindow(hwnd)
+WM_ACTIVATE, WA_INACTIVE, WA_ACTIVE = 0x0006, 0, 1
+SMTO_ABORTIFHUNG = 0x0002
+ACTIVATE_SETTLE_S = 0.1
+ACTIVATE_REPEAT_S = 1.0        # the same instance asked again within this time needs no new pause
+_last_active_hwnd = 0
+_last_active_at = 0.0
+user32.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+                                       wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
+user32.SendMessageTimeoutW.restype = wintypes.LPARAM
 
 
-@contextlib.contextmanager
-def focused(win: GameWindow, api=None, sleep=time.sleep, settle: float = 0.4):
-    """Give the window the focus for a moment and hand it back afterwards. Normal clicks work on a window in
-    the background, but some Android dialogs of the game (the inactivity disconnect) ignore clicks while the
-    window is not the active one. Measured live 2026-11-07: the same posted click did nothing for minutes and
-    closed the dialog in 2 s once the window was active."""
-    api = api or user32
-    with _focus_lock:
-        prev = api.GetForegroundWindow()
-        taken = prev != win.hwnd
-        try:
-            if taken:
-                _foreground(api, win.hwnd)
-                sleep(settle)
-            yield
-        finally:
-            if taken and prev and api.IsWindow(prev):
-                _foreground(api, prev)
+def _send_activate(hwnd: int, state: int, other: int) -> None:
+    res = ctypes.c_size_t()
+    user32.SendMessageTimeoutW(hwnd, WM_ACTIVATE, state, other, SMTO_ABORTIFHUNG, 500, ctypes.byref(res))
+
+
+def activate_instance(win: GameWindow) -> bool:
+    """Mark `win` as the active Play Games instance (and every other game window as inactive) so that the
+    input posted next reaches it. True if messages were sent; False when `win` is not a game window or is the
+    only one (nothing to arbitrate). Call it inside the input lock."""
+    global _games_cache, _last_active_hwnd, _last_active_at
+    hwnd = getattr(win, "hwnd", None)
+    if hwnd is None:
+        return False
+    games = _game_hwnds()
+    if hwnd not in games:                  # a window opened or re-created within the cache time: look again once
+        _games_cache = (0.0, [])
+        games = _game_hwnds()
+        if hwnd not in games:
+            return False
+    others = [h for h in games if h != hwnd]
+    if not others:
+        return False
+    _send_activate(hwnd, WA_ACTIVE, 0)
+    for h in others:
+        _send_activate(h, WA_INACTIVE, hwnd)
+    now = time.monotonic()
+    if _last_active_hwnd != hwnd or now - _last_active_at > ACTIVATE_REPEAT_S:
+        time.sleep(ACTIVATE_SETTLE_S)      # the host needs a moment to switch (the user may have clicked a window)
+    _last_active_hwnd, _last_active_at = hwnd, time.monotonic()
+    return True
 
 
 def restore_if_minimized(win: GameWindow, api=None, sleep=time.sleep) -> bool:
@@ -368,13 +317,13 @@ def post_wheel(win: GameWindow, x: float, y: float, delta: int) -> None:
     wparam = ((delta & 0xFFFF) << 16)
     lparam = ((sy & 0xFFFF) << 16) | (sx & 0xFFFF)
     with _input_lock:
-        raise_above_overlapping(win)
+        activate_instance(win)
         user32.PostMessageW(win.hwnd, WM_MOUSEWHEEL, wparam, lparam)
 
 
 def click(win: GameWindow, x: float, y: float, hold_s: float = 0.08) -> None:
     with _input_lock:                  # the press and the release of a tap must not be split by another window
-        raise_above_overlapping(win)
+        activate_instance(win)
         post_mouse(win, "down", x, y)
         time.sleep(hold_s)
         post_mouse(win, "up", x, y)

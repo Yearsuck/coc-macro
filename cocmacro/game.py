@@ -126,25 +126,23 @@ class RealGame:
                    for name, threshold in INACTIVITY_TEMPLATES)
 
     def reload_if_disconnected(self) -> bool:
-        """Press VOLVER A CARGAR if the inactivity dialog is visible. True if pressed. The dialog only takes
-        the click while the window is the active one, so it gets the focus for the press."""
+        """Press VOLVER A CARGAR if the inactivity dialog is visible. True if pressed. The taps go through
+        winctl.click, which marks this window as the active instance first (the host forwards input to the
+        active instance only), so the user's keyboard focus is never touched."""
         if not self.inactivity_dialog():
             return False
         x, y = self.cfg.buttons["reload_inactive"]
         with winctl.exclusive_input(self.stop) as got:
-            if not got:                          # stopped while waiting for the other account: no focus grab
+            if not got:                          # stopped while waiting for the other account
                 return True
-            with winctl.focused(self.win):
-                # the focus stays on the window the whole time: giving it back right after a click made the
-                # dialog ignore it (measured live)
-                for dx, dy in RELOAD_TAP_OFFSETS:
-                    if self.stop.is_set():       # F8: let go of the focus right away
+            for dx, dy in RELOAD_TAP_OFFSETS:
+                if self.stop.is_set():           # F8
+                    return True
+                winctl.click(self.win, x + dx, y + dy)
+                for _ in range(RELOAD_TAP_POLLS):
+                    time.sleep(RELOAD_TAP_POLL_S)
+                    if self.stop.is_set() or not self.inactivity_dialog():
                         return True
-                    winctl.click(self.win, x + dx, y + dy)
-                    for _ in range(RELOAD_TAP_POLLS):
-                        time.sleep(RELOAD_TAP_POLL_S)
-                        if self.stop.is_set() or not self.inactivity_dialog():
-                            return True
         return True
 
     def click_button(self, name: str) -> None:
