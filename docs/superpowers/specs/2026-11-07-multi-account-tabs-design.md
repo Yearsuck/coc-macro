@@ -3,7 +3,7 @@
 ## Intent and why
 
 The user plays two accounts on one PC with Google Play Games on PC multi-instancing (verified 2026-11-07: two
-windows, `Clash of Clans - Ernestitogamer04` and `Clash of Clans - Yearsuckk`, both 1297x729, different villages,
+windows, `Clash of Clans - PlayerOne` and `Clash of Clans - PlayerTwo`, both 1297x729, different villages,
 both captured correctly by `winctl.capture`, one in the foreground and one behind it). Today the app drives a
 single window (`winctl.find_game_window()` returns the first one it finds) and has one config, one bot, one
 log. The user wants **one executable, with a tab per account**, each tab picking which Clash window it drives, so
@@ -12,13 +12,13 @@ both accounts attack at the same time without running two copies of the program.
 ## Goals
 
 - A tab per account (up to 4: Play Games' own window limit). Each tab is today's whole screen: state, setup
-  steps, live reading, rules, deployment, log, Empezar / Parar.
-- Each tab has its own **window selector** (dropdown of the open `Clash of Clans - <name>` windows, with a
+  steps, live reading, rules, deployment, log, `Empezar` (Start) / `Parar` (Stop).
+- Each tab has its own **window selector** (dropdown of the open `Clash of Clans - <account name>` windows, with a
   refresh button) and its own settings: mode (none / walls / busy), "heroes first", stop when full, loot minimums,
   surrender rules, deployment. Two accounts can run different modes and different deployments.
 - Both bots run at the same time (one thread each). No real mouse or foreground needed: capture is
   `PrintWindow`, clicks and deployments are posted window messages.
-- **F8 stops every account.** Each tab also has its own Parar.
+- **F8 stops every account.** Each tab also has its own `Parar`.
 - An existing install keeps working untouched: tab 1 is the current `data/config.json`.
 - A new tab starts with the calibration (buttons, regions) copied from tab 1: same window size, so no
   recalibration.
@@ -29,7 +29,7 @@ both accounts attack at the same time without running two copies of the program.
   tab keeps one mode, as today. Separate request if wanted.
 - No two bots on the same window. Starting a tab on a window another running tab owns is refused with a message.
 - No running calibration or recording in two tabs at once (they read the real mouse): while one runs the other
-  tabs' Calibrar / Grabar are disabled.
+  tabs' `Calibrar` (Calibrate) / `Grabar` (Record) are disabled.
 - No new automation features, no second update checker, no per-tab update prompts.
 - Anti-goal: a regression in the single-account experience (same screens, same text, same defaults) or a tab
   whose bot can click in the other tab's window.
@@ -43,7 +43,7 @@ both accounts attack at the same time without running two copies of the program.
 - Shared and global by nature: the F8 / F9 `pynput` hotkeys, the update check and the Supercell warning (once,
   at app level), `data/templates` and `data/recordings` (shared by all tabs). The lazy module caches
   `ocr._templates` and `vision._zero` are idempotent loads, safe from two threads.
-- Windows are matched by title text, which carries the Play Games gamer name. The `hwnd` is resolved at Empezar,
+- Windows are matched by title text, which carries the Play Games gamer name. The `hwnd` is resolved at `Empezar`,
   not stored.
 
 ## Design (decided)
@@ -76,11 +76,11 @@ threads are viable, no focus switching or input serialisation is needed.
 ## Decisions (supervisor's calls, from the builder check; the user may change them)
 
 - **Window matching**: exact title first, then "contains". An empty `window_title` is allowed only when exactly one
-  game window is open (today's behaviour); with several open, Empezar is refused with "elige una ventana". The
-  title is persisted per tab and re-resolved at Empezar and on refresh; if the window is gone the tab shows it
-  missing and Empezar is refused. The duplicate-window guard works on the resolved `hwnd`, empty titles included.
+  game window is open (today's behaviour); with several open, `Empezar` is refused with "elige una ventana" ("choose a window"). The
+  title is persisted per tab and re-resolved at `Empezar` and on refresh; if the window is gone the tab shows it
+  missing and `Empezar` is refused. The duplicate-window guard works on the resolved `hwnd`, empty titles included.
 - **Calibrate / record**: allowed only when no tab has a bot running; while one tab calibrates or records, the
-  other tabs' Empezar / Calibrar / Grabar are disabled. (Conservative and the same as today's single app.)
+  other tabs' `Empezar` / `Calibrar` / `Grabar` are disabled. (Conservative and the same as today's single app.)
 - **New tab calibration**: one-time copy at creation of `buttons`, `regions`, `tpl_size` and `aspect` from tab 1
   plus the deployment NAME (recordings are shared, so the new account starts on the same attack; never mode or
   thresholds). Independent afterwards; recalibrating tab 1 does not change the others.
@@ -89,9 +89,9 @@ threads are viable, no focus switching or input serialisation is needed.
   Closing a running tab is refused with a message (stop it first); it never stops a bot by itself.
 - **Debug captures**: per account, `data/debug/<n>` (n = file number, 1 for `config.json`), pruned per folder.
 - **Account name**: filled automatically from the selected window title (the text after `Clash of Clans - `);
-  not typed. Before a window is chosen the tab is called `Cuenta N`.
+  not typed. Before a window is chosen the tab is called `Cuenta N` (Account N).
 - **Listing**: minimized windows count (they are visible to Windows); the dropdown marks windows already used by
-  another tab as "(en uso)". The `+` button is disabled at 4 tabs.
+  another tab as "(en uso)" ("(in use)"). The `+` button is disabled at 4 tabs.
 
 ## Left to the builder
 
@@ -111,13 +111,13 @@ test structure.
 
 ## Inactivity reload (added during implementation)
 
-After long idle time the game shows a modal "Estas ahi? Se te ha desconectado por inactividad" dialog that
+After long idle time the game shows a modal "Estás ahí? Se te ha desconectado por inactividad" ("Are you there? You have been disconnected due to inactivity") dialog that
 swallows every click. Measured live: a click posted to a background window is ignored by this dialog unless the
 window is the active one, and the button needed a slightly different point in each window. So the reload takes
 the focus for a moment (one window at a time, `winctl.focused`), taps a few nearby points while keeping it, waits
 for the dialog to go (the village is visible behind it, so "home" alone proves nothing), retries up to 3 times and
 waits up to 5 minutes for the village (a reload can land in a live replay of an attack). The dialog is recognised
-by its title AND body text; the "Conexion perdida / otro dispositivo" dialog is deliberately never pressed
+by its title AND body text; the "Conexión perdida / otro dispositivo" ("Connection lost / another device") dialog is deliberately never pressed
 (reloading it would kick the account's other session). Known cost: the Alt tap used to unlock
 `SetForegroundWindow` also reaches the user's active app, once when the focus is taken and once when it is given
-back. Not measured: the score of the "otro dispositivo" dialog against these templates (no capture of it was kept).
+back. Not measured: the score of the "otro dispositivo" ("another device") dialog against these templates (no capture of it was kept).
