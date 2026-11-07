@@ -53,6 +53,17 @@ def _dismiss_no_builder(scr: Screen, cfg: Config, log, check, sleep) -> bool:
     return True
 
 
+def _menu_opened(scr: Screen, sleep, tries: int = 6) -> bool:
+    """The Construir menu can take a second or two to open (slower while another account's window is being
+    switched to), so look for its X a few times before saying it did not open."""
+    for i in range(tries):
+        if scr.has("menu_close_x"):
+            return True
+        if i + 1 < tries:
+            sleep(0.5)
+    return False
+
+
 def _reset_view(scr: Screen, cfg: Config, check, sleep) -> None:
     """Open and close the Construir menu: drops the wall selection and leaves the village as the bot expects."""
     check()
@@ -342,7 +353,7 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
     sleep(CLICK_DELAY + 0.6)
     started = False
     try:
-        if not scr.has("menu_close_x"):
+        if not _menu_opened(scr, sleep):
             log("El menu Construir no se abrio: no pulso nada")
             return False
         frame = scr.grab()
