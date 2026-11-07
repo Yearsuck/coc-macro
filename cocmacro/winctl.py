@@ -23,7 +23,8 @@ user32.SetProcessDPIAware()
 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL = 0x0200, 0x0201, 0x0202, 0x020A
 MK_LBUTTON = 1
 SW_SHOWNOACTIVATE = 4
-HWND_BOTTOM = 1
+HWND_BOTTOM, HWND_TOP = 1, 0
+GW_HWNDNEXT, GW_HWNDPREV = 2, 3
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 TITLE_PREFIX = "Clash of Clans"
 PROCESS_NAME = "crosvm"
@@ -148,6 +149,106 @@ _focus_lock = threading.Lock()      # one window at a time takes the focus
 _input_lock = threading.RLock()
 
 
+# Where a click lands is decided by what is VISIBLE at that screen pixel among the Clash windows, not by the window
+# the message is posted to (measured live 2026-11-07: a tap posted to the window behind was received by the window
+# in front, at the same screen position; a non-Clash app on top does not matter). So before sending input the
+# target window must not be covered by another Clash window.
+_GAMES_TTL = 3.0
+RAISE_SETTLE_S = 0.05
+_games_cache: tuple[float, list[int]] = (0.0, [])
+
+
+GAME_WINDOW_CLASS = "CROSVM_1"
+
+
+def _class_name(hwnd) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
+def _game_hwnds() -> list[int]:
+    """Visible Play Games game windows (class CROSVM_1), whatever the game. Identified by CLASS, not by title:
+    GetWindowText on a window owned by a thread that does not pump messages (the app's own Tk window while a
+    test or a busy thread is blocked) blocks the caller. Cached for a few seconds."""
+    global _games_cache
+    now = time.monotonic()
+    if now - _games_cache[0] > _GAMES_TTL:
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def cb(hwnd, _):
+            if user32.IsWindowVisible(hwnd) and _class_name(hwnd) == GAME_WINDOW_CLASS:
+                found.append(hwnd)
+            return True
+
+        user32.EnumWindows(cb, 0)
+        _games_cache = (now, found)
+    return _games_cache[1]
+
+
+def _zorder_top_first() -> list[int]:
+    order, h = [], user32.GetTopWindow(None)
+    while h:
+        order.append(h)
+        h = user32.GetWindow(h, GW_HWNDNEXT)
+    return order
+
+
+def _rect_of(hwnd: int) -> tuple[int, int, int, int]:
+    r = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    return r.left, r.top, r.right, r.bottom
+
+
+def _overlap(a, b) -> bool:
+    return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
+
+
+def covering_window(order: list[int], rects: dict[int, tuple], hwnd: int) -> int | None:
+    """`order`: Clash window handles, top of the z-order first. The highest Clash window that is above `hwnd`
+    and overlaps it, or None when `hwnd` is not covered by another Clash window."""
+    if hwnd not in order:
+        return None
+    for other in order[:order.index(hwnd)]:
+        if other in rects and hwnd in rects and _overlap(rects[other], rects[hwnd]):
+            return other
+    return None
+
+
+def raise_above_overlapping(win: GameWindow) -> bool:
+    """Put `win` directly above the highest Clash window that covers it, without activating it and without
+    passing over the user's other applications. True if it had to be raised."""
+    global _games_cache
+    hwnd = getattr(win, "hwnd", None)
+    if hwnd is None:
+        return False
+    games = _game_hwnds()
+    if hwnd not in games:                  # a window opened or re-created within the cache time: look again once
+        _games_cache = (0.0, [])
+        games = _game_hwnds()
+        if hwnd not in games:
+            return False
+    order = [h for h in _zorder_top_first() if h in games]
+    rects = {h: _rect_of(h) for h in order}
+    top = covering_window(order, rects, hwnd)
+    if top is None:
+        return False
+    above_top = user32.GetWindow(top, GW_HWNDPREV)
+    user32.SetWindowPos(hwnd, above_top or HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+    time.sleep(RAISE_SETTLE_S)             # let the new order be applied before the game hit-tests the click
+    return True
+
+
+def overlapping_titles(win: GameWindow) -> list[str]:
+    """Titles of the other Clash windows whose area overlaps `win` (for a warning)."""
+    games = _game_hwnds()
+    if getattr(win, "hwnd", None) not in games:
+        return []
+    mine = _rect_of(win.hwnd)
+    return [_title(h) for h in games if h != win.hwnd and _overlap(_rect_of(h), mine)]
+
+
 @contextlib.contextmanager
 def exclusive_input(stop: threading.Event | None = None, poll: float = 0.2):
     """Hold the input channel. Yields True once it is held, or False if `stop` was set while waiting (the
@@ -267,11 +368,13 @@ def post_wheel(win: GameWindow, x: float, y: float, delta: int) -> None:
     wparam = ((delta & 0xFFFF) << 16)
     lparam = ((sy & 0xFFFF) << 16) | (sx & 0xFFFF)
     with _input_lock:
+        raise_above_overlapping(win)
         user32.PostMessageW(win.hwnd, WM_MOUSEWHEEL, wparam, lparam)
 
 
 def click(win: GameWindow, x: float, y: float, hold_s: float = 0.08) -> None:
     with _input_lock:                  # the press and the release of a tap must not be split by another window
+        raise_above_overlapping(win)
         post_mouse(win, "down", x, y)
         time.sleep(hold_s)
         post_mouse(win, "up", x, y)
