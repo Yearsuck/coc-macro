@@ -159,10 +159,10 @@ def focused(win: GameWindow, api=None, sleep=time.sleep, settle: float = 0.4):
     with _focus_lock:
         prev = api.GetForegroundWindow()
         taken = prev != win.hwnd
-        if taken:
-            _foreground(api, win.hwnd)
-            sleep(settle)
         try:
+            if taken:
+                _foreground(api, win.hwnd)
+                sleep(settle)
             yield
         finally:
             if taken and prev and api.IsWindow(prev):

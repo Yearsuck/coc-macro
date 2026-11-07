@@ -56,4 +56,5 @@ def test_the_forge_tab_is_never_a_button():
 def test_reload_inactive_button_and_template_exist():
     assert "reload_inactive" in defaults.BUTTONS
     assert defaults.BUTTONS["reload_inactive"] == (0.355, 0.571)
-    assert (defaults.DIR / "reload_inactive.png").exists()
+    assert (defaults.DIR / "reload_inactive_title.png").exists()
+    assert (defaults.DIR / "reload_inactive_body.png").exists()

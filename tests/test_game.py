@@ -238,7 +238,7 @@ def test_reload_if_disconnected_takes_the_focus_for_the_press(tmp_path, monkeypa
     g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
     events = []
     monkeypatch.setattr(templates, "match",
-                        lambda frame, name, tpl_dir: name == "reload_inactive" and "click" not in events)
+                        lambda frame, name, tpl_dir, threshold=None: name.startswith("reload_inactive") and "click" not in events)
 
     @contextlib.contextmanager
     def focus(win, **kw):
@@ -253,16 +253,16 @@ def test_reload_if_disconnected_takes_the_focus_for_the_press(tmp_path, monkeypa
 
 def test_inactivity_dialog_reflects_the_template(tmp_path, monkeypatch):
     g, _ = make(tmp_path, monkeypatch, "f004.png")
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: name == "reload_inactive")
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: name.startswith("reload_inactive"))
     assert g.inactivity_dialog() is True
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: False)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: False)
     assert g.inactivity_dialog() is False
 
 
 def test_reload_if_disconnected_clicks_when_template_present(tmp_path, monkeypatch):
     g, clicks = make(tmp_path, monkeypatch, "f004.png")
     g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: name == "reload_inactive" and not clicks)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: name.startswith("reload_inactive") and not clicks)
     assert g.reload_if_disconnected() is True
     assert clicks == [(0.355, 0.571)]                       # the dialog is gone after the first tap
 
@@ -270,7 +270,7 @@ def test_reload_if_disconnected_clicks_when_template_present(tmp_path, monkeypat
 def test_reload_if_disconnected_does_nothing_when_absent(tmp_path, monkeypatch):
     g, clicks = make(tmp_path, monkeypatch, "f004.png")
     g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: False)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: False)
     assert g.reload_if_disconnected() is False
     assert clicks == []
 
@@ -278,7 +278,7 @@ def test_reload_if_disconnected_does_nothing_when_absent(tmp_path, monkeypatch):
 def test_reload_if_disconnected_ignores_other_dialogs_and_templates(tmp_path, monkeypatch):
     g, clicks = make(tmp_path, monkeypatch, "f004.png")
     g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: name != "reload_inactive")
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: not name.startswith("reload_inactive"))
     assert g.reload_if_disconnected() is False
     assert clicks == []
 
@@ -295,7 +295,7 @@ def test_reload_taps_nearby_points_keeping_the_focus_until_the_dialog_is_gone(tm
         events.append("click")
 
     # the dialog is up for the first look and until the third tap has been made
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: len(taps) < 3)
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: len(taps) < 3)
 
     @contextlib.contextmanager
     def focus(win, **kw):
@@ -314,7 +314,30 @@ def test_reload_gives_up_tapping_after_every_point_and_still_reports_the_press(t
     g, _ = make(tmp_path, monkeypatch, "f004.png")
     g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
     taps = []
-    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir: True)       # the dialog never goes
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: True)       # the dialog never goes
     monkeypatch.setattr(winctl, "click", lambda win, x, y, hold_s=0.08: taps.append((x, y)))
     assert g.reload_if_disconnected() is True              # the bot checks the dialog and presses again
     assert len(taps) == len(RELOAD_TAP_OFFSETS)
+
+
+def test_the_inactivity_dialog_needs_title_and_body(tmp_path, monkeypatch):
+    """Only one of the two texts matching (say a dialog with the same box and another message) is not it."""
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    for only in ("reload_inactive_title", "reload_inactive_body"):
+        monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None, only=only: name == only)
+        assert g.inactivity_dialog() is False
+        assert g.reload_if_disconnected() is False
+    assert clicks == []
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: True)
+    assert g.inactivity_dialog() is True
+
+
+def test_f8_during_the_reload_taps_lets_go_at_once(tmp_path, monkeypatch):
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    taps = []
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: True)   # dialog stays
+    monkeypatch.setattr(winctl, "click", lambda win, x, y, hold_s=0.08: (taps.append((x, y)), g.stop.set()))
+    assert g.reload_if_disconnected() is True
+    assert len(taps) == 1                                  # the stop flag ended the sequence after the first tap
