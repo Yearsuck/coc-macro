@@ -107,7 +107,7 @@ def test_account_config():
     # Settings reset to defaults
     assert copy_cfg.gold_min == 500000
     assert copy_cfg.mode == "none"
-    assert copy_cfg.deployment == "default"
+    assert copy_cfg.deployment == "recorded_run"        # recordings are shared: same attack to start with
     assert copy_cfg.window_title == ""
     assert copy_cfg.account_name == ""
 

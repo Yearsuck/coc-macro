@@ -81,12 +81,14 @@ def next_file(data_dir: Path, files: list[str]) -> str:
 
 
 def account_config(base: Config) -> Config:
-    """Create a new Config with calibration copied from base and defaults for all other fields."""
+    """Create a new Config with calibration copied from base and defaults for all other fields, except the
+    deployment name: recordings are shared by every tab, so the new account starts on the same attack."""
     cfg = Config()
     cfg.buttons = copy.deepcopy(base.buttons)
     cfg.regions = copy.deepcopy(base.regions)
     cfg.tpl_size = copy.deepcopy(base.tpl_size)
     cfg.aspect = copy.deepcopy(base.aspect)
+    cfg.deployment = base.deployment
     return cfg
 
 

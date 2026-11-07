@@ -391,3 +391,17 @@ def test_claim_window_runs_on_the_bot_thread_so_it_never_touches_widgets(app, mo
     monkeypatch.setattr(app.panel, "refresh_state", real)
     app.panel.q.put(("refresh_all", None))
     app.panel._poll()                                       # the Tk thread handles the refresh event
+
+
+def test_start_checks_the_window_of_its_own_tab(app, monkeypatch):
+    """preflight.check has its own untitled find_window default: with two windows open it said 'elige una'."""
+    seen = {}
+
+    def fake_check(cfg, tpl_dir, rec_dir, dry, find_window=None, capture=None):
+        seen["find_window"] = find_window
+        return "stop here"                                  # refuse to start: nothing else runs
+    monkeypatch.setattr(gui.preflight, "check", fake_check)
+    panel = app.panel
+    panel.cfg.window_title = "Clash of Clans - Alguien"
+    panel.start()
+    assert seen["find_window"] == panel._find_window

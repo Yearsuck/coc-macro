@@ -556,7 +556,7 @@ class AccountPanel(tk.Frame):
         if self.app.exclusive is not None and self.app.exclusive is not self:
             return
         dry = self.dry.get()
-        err = preflight.check(self.cfg, TPL_DIR, REC_DIR, dry)
+        err = preflight.check(self.cfg, TPL_DIR, REC_DIR, dry, find_window=self._find_window)
         if err:
             self.log(err)
             return

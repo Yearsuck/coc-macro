@@ -82,7 +82,8 @@ threads are viable, no focus switching or input serialisation is needed.
 - **Calibrate / record**: allowed only when no tab has a bot running; while one tab calibrates or records, the
   other tabs' Empezar / Calibrar / Grabar are disabled. (Conservative and the same as today's single app.)
 - **New tab calibration**: one-time copy at creation of `buttons`, `regions`, `tpl_size` and `aspect` from tab 1
-  (never mode, deployment or thresholds). Independent afterwards; recalibrating tab 1 does not change the others.
+  plus the deployment NAME (recordings are shared, so the new account starts on the same attack; never mode or
+  thresholds). Independent afterwards; recalibrating tab 1 does not change the others.
 - **Closing tabs**: the registry stores explicit file names. Tab 1 cannot be closed. Closing a tab removes it
   from the registry and keeps its config file on disk; a new tab never reuses a file name (next unused number).
   Closing a running tab asks to stop it first.
