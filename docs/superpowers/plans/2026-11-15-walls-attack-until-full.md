@@ -1,7 +1,7 @@
 # Plan (2026-11-15): walls mode = attack until a storage is full, and survive errors
 
 Branch `feature/walls-attack-until-full`, worktree `../coc-macro-public.wt/walls-attack-until-full`.
-Status: **approved 2026-11-15 with the three decisions at the end; implementation not started.**
+Status: **implemented (PR #41); see Progress at the end.**
 
 ## What was asked
 
@@ -127,3 +127,44 @@ recoveries (see B).
 ## Not in scope
 
 Release / version bump, the dark elixir bar, the pets counter, changes to busy mode.
+
+## Progress (2026-11-15, night)
+
+| Task | State |
+|---|---|
+| 1 OCR tinted loot | merged into `develop` (PR #40). 48 of 50 saved numbers read, 0 wrong. |
+| 2-4 loop / search / recovery | implemented on this branch (agy: opus until quota, then gemini; two fix rounds, the last 7 red tests and the main loop fixed by the supervisor). Full suite green. |
+| 5 docs | user guide, architecture, README updated. |
+| 6 live validation | see below. PR open, reviewers pending. |
+
+Verified live on the open account (2026-11-15):
+- 3 full attacks in walls mode with the new loop (search, verified Siguiente, deploy, surrender, back).
+- An inactivity dialog that was on screen at start: pressed by the bot, village back, run continued.
+- A stuck start (game left on the scout screen, countdown ran out, battle started by itself): timeout ->
+  capture saved -> `_recover` ended the battle -> village -> attack completed.
+- `vision.native_dialog` on the real inactivity frame: point (0.354, 0.569) = button centre; 0 hits on 151 other frames.
+
+- A real server dialog appeared in the last live run, in the middle of a battle: `Conexion perdida ... REINTENTAR`.
+  The shape detector (written from the inactivity dialog alone) found it, saved it and pressed it. Kept as
+  `tests/fixtures/ui/dialog_connection_lost.png` (masked) and used as a test. After it the game showed
+  `No se ha podido atacar esta aldea. Intentalo mas tarde` (search screen with only Volver): no known screen, the
+  recovery just waited. `RealGame.cancel_search` + template `search_back` now press that Volver.
+
+NOT verified live:
+- The wall upgrade after a storage fills (storages were at ~6-8 M, never full) and the wait for a builder.
+- `cancel_search` and the review fixes that came after the last live run (two-look dialog confirmation, two-poll
+  self-started-battle check, blind builder counter, unexpected errors recovered): unit tests only; the game was
+  closed by then.
+- The battle starting by itself in the middle of the evaluate loop (only reached through recovery).
+- That the nudged repeat press cures the ignored `Siguiente` (seen once: 4 presses at one point ignored;
+  not reproduced again in 40 + ~10 presses).
+
+Review (3 read-only reviewers): logic APPROVE; game/vision and tests REQUEST_CHANGES, all addressed: dialog must be
+seen twice before a press, rightmost button on two-button dialogs, guarded debug dump, self-start needs two polls,
+blind builder counter stops the wait after 6 looks, unexpected exceptions are recovered, and tests for the 18
+mutations that survived (detector guards, `_Stuck` at every timeout site, dialog in battle / while waiting).
+
+Open / known:
+- `glyphs.npz` not rebuilt; `scripts/build_glyphs.py` reports 1 leave-one-out error (`f052/damage`).
+- A 60 s wait takes ~107 s of wall time: each poll also grabs frames for the notice and dialog checks.
+- Raw captures (git-ignored): `tests/fixtures/raw/{loot-yellow,battle-started,dialogs}`.
