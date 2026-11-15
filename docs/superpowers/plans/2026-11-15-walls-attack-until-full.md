@@ -1,7 +1,7 @@
 # Plan (2026-11-15): walls mode = attack until a storage is full, and survive errors
 
 Branch `feature/walls-attack-until-full`, worktree `../coc-macro-public.wt/walls-attack-until-full`.
-Status: **waiting for approval, no code written.**
+Status: **approved 2026-11-15 with the three decisions at the end; implementation not started.**
 
 ## What was asked
 
@@ -50,7 +50,10 @@ Sources: 72 failure captures in `C:\Users\ernes\CoCMacro\data\debug` and `Downlo
   2. no storage full -> attack, the wall routine is **not** run;
   3. gold or elixir full -> `upgrade_walls` (already spends both resources, as many walls as each pays
      for); it runs again while it starts upgrades and a storage is still full (cap `MAX_SPEND_ROUNDS`);
-  4. then attack, whatever the routine did (no free builder, no walls left: log it and attack).
+  4. a storage full and **no free builder**: do not attack; look at the builder counter every
+     `FULL_POLL_S` (reload dialogs are still handled meanwhile) until one is free, then upgrade the walls;
+  5. then attack. A routine that had a builder and still upgraded nothing (no walls left, price not
+     payable) does not block: log it and attack.
 - `stop_when_full` keeps its meaning: with it on and everything full the bot still waits.
 - `none` and `busy` modes: unchanged.
 
@@ -61,14 +64,17 @@ Sources: 72 failure captures in `C:\Users\ernes\CoCMacro\data\debug` and `Downlo
 - `Bot.run` on `_Stuck`: save a capture (`dump_debug("stuck")`), then `_recover()`: press a reload dialog
   if there is one, close a notice / menu / upgrade window, results -> Volver, scout or battle -> Terminar
   batalla (+ confirmation if it shows), wait for the village (up to `RELOAD_WAIT_S`), go on with the loop.
-  Three recoveries in a row with no finished attack -> stop with a clear message.
+  The bot never stops by itself for this: only F8 / Stop or a closed window end the run. Recoveries in a
+  row with no finished attack pause longer each time (30 s, 60 s, ... capped at 5 min) so a broken
+  screen is not hammered.
 - Dialogs are looked for **while waiting** too (every ~5 s inside `_wait` and the battle loop), not only
   between attacks, so a dialog in the middle of a search is handled in seconds, not after the timeout.
 - Server dialog: `vision.native_dialog(frame)` recognises the dialog family by shape (large flat dark box
   in the centre + a blue text button in its lower part) and returns where the button is.
   - inactivity dialog (title + body match): pressed at once, as today;
-  - any other native dialog: capture saved to `data/debug`, pressed after 20 s, **at most 3 times in
-    30 minutes**, then the bot stops. This is my call, see "Decisions to confirm".
+  - any other native dialog: capture saved to `data/debug` (first time of each run of presses), then its
+    button is pressed, **every time, with no limit**, until the user stops the bot (user decision; it
+    accepts that the "otro dispositivo" dialog is pressed too).
 - Not possible to build from a real capture: none exists. The detector is checked against the old
   inactivity crop (positive) and every saved frame + fixture (negatives); the first real server dialog
   will be captured automatically and the detector adjusted then.
@@ -108,14 +114,15 @@ on each.
   6.4 M now, 1 builder free); otherwise that path stays "not verified live" and is said so in the PR.
 - Cannot be verified: the server dialog (no way to provoke it safely).
 
-## Decisions to confirm
+## Decisions (user, 2026-11-15)
 
-1. Unknown dialog with a reload button: press after 20 s, max 3 per 30 min, then stop. Stricter
-   alternative: never press an unknown dialog, only capture it and stop (safe for the "other device"
-   case, but the bot does not restart until a capture exists and a template is added).
-2. Recovery (B) and the search fixes (C) apply to **every** mode, not only walls: they live in the shared
-   loop.
-3. With no free builder and a full storage, walls mode keeps attacking (it does not wait).
+1. Any dialog with a reload / retry button is always pressed, with no limit, until the user stops the bot.
+2. Recovery (B) and the search fixes (C) apply to **every** mode, not only walls.
+3. A storage full and no free builder: walls mode waits, checking periodically, until a builder is free;
+   then it upgrades and goes back to the loop (attacks -> storage full -> walls).
+
+My call, not asked: the bot never stops by itself on a timeout either, it pauses longer between
+recoveries (see B).
 
 ## Not in scope
 
