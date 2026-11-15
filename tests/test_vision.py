@@ -302,3 +302,168 @@ def test_dark_storage_full_on_real_captures():
 def test_dark_storage_full_invalid_inputs():
     assert vision.dark_storage_full(None, DARK_REGION) is None
     assert vision.dark_storage_full(np.zeros((100, 100, 3), np.uint8), (0.5, 0.5, 0.5, 0.5)) is None
+
+
+def test_native_dialog_village_noisy_frame_returns_none():
+    np.random.seed(42)
+    frame = np.random.randint(50, 200, (729, 1296, 3), dtype=np.uint8)
+    assert vision.native_dialog(frame) is None
+
+
+def test_native_dialog_synthetic_frame_with_box_and_blue_button_returns_point():
+    # 1296x729 village-like noisy frame
+    np.random.seed(42)
+    frame = np.random.randint(50, 200, (729, 1296, 3), dtype=np.uint8)
+
+    # centred 551x165 box of BGR (30, 28, 25)
+    bx0 = (1296 - 551) // 2   # 372
+    by0 = (729 - 165) // 2    # 282
+    bx1 = bx0 + 551           # 923
+    by1 = by0 + 165           # 447
+    frame[by0:by1, bx0:bx1] = (30, 28, 25)
+
+    # near-white (235, 233, 232) text rows in its upper part
+    frame[by0 + 20:by0 + 35, bx0 + 30:bx0 + 300] = (235, 233, 232)
+    frame[by0 + 45:by0 + 60, bx0 + 30:bx0 + 450] = (235, 233, 232)
+
+    # pale-blue (212, 202, 171) text-like block of at least 30x10 px in its lower left
+    # Lower 40% starts at by0 + int(165 * 0.6) = by0 + 99
+    btn_y0 = by0 + 115
+    btn_y1 = btn_y0 + 15
+    btn_x0 = bx0 + 30
+    btn_x1 = btn_x0 + 40
+    frame[btn_y0:btn_y1, btn_x0:btn_x1] = (212, 202, 171)
+
+    spot = vision.native_dialog(frame)
+    assert spot is not None
+    # relative centre of the button block
+    cx_px = spot[0] * 1296
+    cy_px = spot[1] * 729
+    assert btn_x0 <= cx_px <= btn_x1
+    assert btn_y0 <= cy_px <= btn_y1
+
+
+def test_native_dialog_grey_box_no_blue_returns_none():
+    np.random.seed(42)
+    frame = np.random.randint(50, 200, (729, 1296, 3), dtype=np.uint8)
+    bx0 = (1296 - 551) // 2
+    by0 = (729 - 165) // 2
+    frame[by0:by0 + 165, bx0:bx0 + 551] = (30, 28, 25)
+    frame[by0 + 20:by0 + 35, bx0 + 30:bx0 + 300] = (235, 233, 232)
+    assert vision.native_dialog(frame) is None
+
+
+def test_native_dialog_small_grey_box_in_corner_returns_none():
+    frame = np.zeros((729, 1296, 3), dtype=np.uint8)
+    # small box in corner
+    frame[10:60, 10:110] = (30, 28, 25)
+    frame[40:55, 20:60] = (212, 202, 171)
+    assert vision.native_dialog(frame) is None
+
+
+def test_native_dialog_fully_dark_frame_returns_none():
+    frame = np.zeros((729, 1296, 3), dtype=np.uint8)
+    assert vision.native_dialog(frame) is None
+
+
+def test_native_dialog_invalid_inputs_returns_none():
+    assert vision.native_dialog(None) is None
+    assert vision.native_dialog(np.zeros((729, 1296), dtype=np.uint8)) is None
+    assert vision.native_dialog("not a frame") is None
+    assert vision.native_dialog(np.zeros((5, 5, 3), dtype=np.uint8)) is None
+
+
+def test_native_dialog_ignores_stray_blue_pixels_to_the_right():
+    # 1296x729 village-like noisy frame
+    np.random.seed(42)
+    frame = np.random.randint(50, 200, (729, 1296, 3), dtype=np.uint8)
+
+    # centred 551x165 box of BGR (30, 28, 25)
+    bx0 = (1296 - 551) // 2   # 372
+    by0 = (729 - 165) // 2    # 282
+    bx1 = bx0 + 551           # 923
+    by1 = by0 + 165           # 447
+    frame[by0:by1, bx0:bx1] = (30, 28, 25)
+
+    # near-white text rows
+    frame[by0 + 20:by0 + 35, bx0 + 30:bx0 + 300] = (235, 233, 232)
+    frame[by0 + 45:by0 + 60, bx0 + 30:bx0 + 450] = (235, 233, 232)
+
+    # main pale-blue button block in lower left (40x15 px = 600 px)
+    btn_y0 = by0 + 115
+    btn_y1 = btn_y0 + 15
+    btn_x0 = bx0 + 30
+    btn_x1 = btn_x0 + 40
+    frame[btn_y0:btn_y1, btn_x0:btn_x1] = (212, 202, 171)
+
+    # second small blue block (20 px) far to the right in the lower part of the box
+    stray_y0 = by0 + 115
+    stray_y1 = stray_y0 + 4
+    stray_x0 = bx0 + 450
+    stray_x1 = stray_x0 + 5
+    frame[stray_y0:stray_y1, stray_x0:stray_x1] = (212, 202, 171)
+
+    spot = vision.native_dialog(frame)
+    assert spot is not None
+    cx_px = spot[0] * 1296
+    cy_px = spot[1] * 729
+    assert btn_x0 <= cx_px <= btn_x1
+    assert btn_y0 <= cy_px <= btn_y1
+
+
+
+def test_native_dialog_with_two_buttons_returns_the_right_one():
+    """CANCELAR / REINTENTAR: Android puts the affirmative action on the right."""
+    frame = np.full((729, 1296, 3), 120, np.uint8)
+    bx0, by0 = 372, 282
+    frame[by0:by0 + 165, bx0:bx0 + 551] = (30, 28, 25)
+    frame[by0 + 20:by0 + 35, bx0 + 30:bx0 + 300] = (235, 233, 232)
+    frame[by0 + 120:by0 + 135, bx0 + 30:bx0 + 110] = (212, 202, 171)       # left button, the longer text
+    frame[by0 + 120:by0 + 135, bx0 + 420:bx0 + 480] = (212, 202, 171)      # right button
+    x, y = vision.native_dialog(frame)
+    assert (bx0 + 420) / 1296 <= x <= (bx0 + 480) / 1296 and (by0 + 120) / 729 <= y <= (by0 + 135) / 729
+
+
+def _dialog_frame(box=(372, 282, 551, 165), blue=(30, 120, 80, 15), fill=1.0, white_low=False):
+    """A grey frame with a dialog-like dark box (x, y, w, h) and a pale-blue block (dx, dy, w, h) inside it."""
+    frame = np.full((729, 1296, 3), 120, np.uint8)
+    x, y, w, h = box
+    frame[y:y + h, x:x + int(w * fill)] = (30, 28, 25)
+    if blue:
+        dx, dy, bw, bh = blue
+        frame[y + dy:y + dy + bh, x + dx:x + dx + bw] = (212, 202, 171)
+    if white_low:
+        frame[y + h - 45:y + h - 30, x + 30:x + 200] = (235, 233, 232)
+    return frame
+
+
+def test_native_dialog_reference_frame_is_found():
+    assert vision.native_dialog(_dialog_frame()) is not None
+
+
+@pytest.mark.parametrize("why,kwargs", [
+    ("box too wide", dict(box=(60, 282, 1180, 165))),
+    ("box too tall", dict(box=(372, 100, 551, 540), blue=(30, 480, 80, 15))),
+    ("box too small", dict(box=(550, 330, 200, 70), blue=(20, 45, 80, 15))),
+    ("box off centre", dict(box=(40, 60, 551, 165))),
+    ("box only half dark", dict(fill=0.5)),
+    ("too few blue pixels", dict(blue=(30, 120, 10, 10))),
+    ("blue only in the upper part", dict(blue=(30, 20, 80, 15))),
+    ("no blue, near-white text low in the box", dict(blue=None, white_low=True)),
+])
+def test_native_dialog_guards(why, kwargs):
+    assert vision.native_dialog(_dialog_frame(**kwargs)) is None, why
+
+
+@pytest.mark.parametrize("name,button", [("dialog_connection_lost", (0.337, 0.569)), ("dialog_inactivity", (0.354, 0.569))])
+def test_native_dialog_on_real_dialogs(name, button):
+    """Real captures (everything but the dialog box blacked out): 'Conexion perdida ... REINTENTAR', seen
+    live for the first time after the detector was written from the inactivity dialog alone."""
+    x, y = vision.native_dialog(cv2.imread(str(FIXTURES / f"{name}.png")))
+    assert abs(x - button[0]) < 0.01 and abs(y - button[1]) < 0.01
+
+
+@pytest.mark.parametrize("name", ["village_no_menu", "menu_builders_tab_filtered", "menu_pets_tab", "storage_bars_full",
+                                  "wall_panel_cost_red", "search_failed"])
+def test_native_dialog_is_not_seen_on_game_screens(name):
+    assert vision.native_dialog(cv2.imread(str(FIXTURES / f"{name}.png"))) is None
