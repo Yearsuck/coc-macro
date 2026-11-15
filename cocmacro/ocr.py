@@ -6,13 +6,15 @@ captures (scripts/build_glyphs.py -> cocmacro/glyphs.npz). Generic OCR (RapidOCR
 was tried first and misread this font (e.g. "736 480" -> "08t 952"). Leave-one-frame-out check
 on 116 labelled digits: 0 errors, so the in-sample fixture tests are not just memorisation.
 """
+from collections import Counter
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 GLYPH_FILE = Path(__file__).with_name("glyphs.npz")
-THRESH = 190          # min(B,G,R) above this = white text (also the one the glyph samples are cut with)
+THRESH = 190          # green and red above this = text (also the cut the glyph samples are made with)
+TINT_SLACK = 60       # blue may be this far below the cut: tinted (pale yellow) text, see _text_mask
 FALLBACK_THRESH = (170, 150, 205)   # light village skins merge background into the digits at one cut or another
 CLOCK_THRESH = 150    # the battle clock sits on a dark bar
 GW, GH = 12, 18       # normalised glyph size
@@ -59,9 +61,18 @@ def _split_touching(patch: np.ndarray, ref_w: float) -> list[np.ndarray]:
     return out or [patch]
 
 
+def _text_mask(crop: np.ndarray, thresh: int) -> np.ndarray:
+    """Pixels of the number. Green and red must clear the cut; blue only `TINT_SLACK` below it: the game
+    tints the loot numbers (gold pale yellow, blue ~195-208 where white text has 255), and a cut on the
+    lowest channel broke those digits up or nibbled a 5 into a 9 (live 2026-11: gold unreadable in 22 of
+    24 saved failures). The coin icon is a saturated yellow with far less blue and stays out."""
+    px = crop.astype(np.int16)
+    return ((px[..., 1:].min(axis=2) > thresh) & (px[..., 0] > thresh - TINT_SLACK)).astype(np.uint8)
+
+
 def segment(crop: np.ndarray, thresh: int = THRESH) -> list[np.ndarray]:
     """Left-to-right list of binary glyph images (tight bounding boxes)."""
-    mask = (crop.min(axis=2) > thresh).astype(np.uint8)
+    mask = _text_mask(crop, thresh)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     comps = [(stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_WIDTH],
               stats[i, cv2.CC_STAT_HEIGHT], i) for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 6]
@@ -128,15 +139,23 @@ def read_crop(crop: np.ndarray) -> int | None:
             value = parse_digits("".join(chars).removesuffix("%"))      # the damage zone often includes the % sign
             if value is not None:
                 reads.append(value)
-    if len(set(reads)) <= 1:
-        return reads[0] if reads else None
-    # Cuts that disagree are not a reading, except a stray speck: yellow gold text is invisible at the
-    # strictest cut, which then "reads" one glyph. Fewer digits than a value two other cuts agree on = noise.
-    longest = max(reads, key=lambda v: len(str(v)))
-    shorter = [v for v in reads if len(str(v)) < len(str(longest))]
-    if reads.count(longest) >= 2 and len(shorter) + reads.count(longest) == len(reads):
-        return longest
-    return None
+    return _agree(reads)
+
+
+def _agree(reads: list[int]) -> int | None:
+    """One value out of the readings of the different cuts. All equal: that one. Readings with fewer digits
+    than the longest are a speck or a number that lost a glyph at a strict cut: they never win, and the
+    longest then needs two cuts behind it. When cuts disagree on a number of the same length (one cut
+    nibbled a 5 into a 9) the value needs three cuts against the dissenting one: two cuts close together
+    can make the same mistake, and a wrong number is worse than a skipped village."""
+    if not reads:
+        return None
+    if len(set(reads)) == 1:
+        return reads[0]
+    digits = max(len(str(v)) for v in reads)
+    ranked = Counter(v for v in reads if len(str(v)) == digits).most_common()
+    value, votes = ranked[0]
+    return value if votes >= (2 if len(ranked) == 1 else 3) else None
 
 
 def read_number(img: np.ndarray, region: tuple[float, float, float, float]) -> int | None:

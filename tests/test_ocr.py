@@ -89,3 +89,35 @@ def test_ambiguous_digit_is_rejected_not_guessed():
     imgs = np.stack([f, f + 0.001])                      # a '6' and an '8' that look the same to us
     assert ocr.classify_in(g, imgs, np.array([a, a]), np.array(["6", "8"])) is None
     assert ocr.classify_in(g, imgs[:1], np.array([a]), np.array(["6"])) == "6"      # only one candidate: fine
+
+
+@pytest.mark.parametrize("reads,expected", [
+    ([], None),
+    ([565511], 565511),
+    ([565511, 565511, 565511, 565511], 565511),
+    ([1347530, 1347530, 1347530, 1347930], 1347530),     # one cut nibbled a 5 into a 9: the other three win
+    ([921956, 921956, 921956, 921556], 921956),
+    ([921956, 921956, 921556], None),                    # two against one of the same length: two close cuts can share a mistake
+    ([1347530, 1347930, 1347930], None),
+    ([189062, 62, 62], None),                            # a number that lost glyphs at two cuts must not outvote the whole one
+    ([189062, 1, 1], None),
+    ([189062, 189062, 1, 1], 189062),
+    ([565511, 965511], None),                            # one against one is not a reading
+    ([565511, 565511, 965511, 965511], None),            # a tie neither
+    ([565511, 965511, 765511], None),
+    ([1, 189062, 189062], 189062),                       # a stray speck read as one glyph at the strictest cut
+    ([1, 189062], None),
+])
+def test_cuts_that_disagree_need_a_clear_majority(reads, expected):
+    assert ocr._agree(reads) == expected
+
+
+def test_tinted_text_is_segmented_like_white_text():
+    """The game now tints the loot numbers (gold pale yellow: blue channel ~200 where white has 255). The
+    cut must not depend on the blue channel alone, or the digits break up; a saturated yellow (the coin
+    icon, blue far lower) must still be left out."""
+    crop = np.zeros((20, 60, 3), np.uint8)
+    crop[3:17, 5:13] = (200, 245, 250)        # a pale-yellow digit-sized block (BGR)
+    crop[3:17, 20:28] = (255, 255, 255)       # a white one
+    crop[3:17, 35:43] = (60, 200, 255)        # coin yellow: not text
+    assert [g.shape for g in ocr.segment(crop)] == [(14, 8), (14, 8)]
