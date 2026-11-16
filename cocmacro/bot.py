@@ -250,6 +250,21 @@ class Bot:
                 self.log("Siguiente no hizo efecto: pulso otra vez")
         raise _Stuck(f"Siguiente no hizo efecto tras {NEXT_TRIES} intentos")
 
+    def _battle_menu_open(self) -> bool:
+        """The Batalla menu (the panel with Buscar batalla over the left half of the village) is up. It hides the
+        Batalla button, so the village does not look like 'home' while it is open; without this check a lost press of
+        Buscar was taken for 'loading a village' and the bot waited for a scout screen that was never coming (live:
+        two stuck cycles of four minutes). Optional on the game, like the other checks."""
+        fn = getattr(self.game, "battle_menu_open", None)
+        if not fn or self.dry_run:
+            return False
+        try:
+            return bool(fn())
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception:
+            return False
+
     def _open_search(self) -> None:
         """Batalla -> Buscar -> Atacar. A notice (star bonus after a win) can appear late and swallow these
         clicks, leaving the village on screen: if after a few seconds it is still the village, press them again
@@ -257,6 +272,8 @@ class Bot:
         for attempt in range(SEARCH_TRIES):
             self._reload_if_disconnected()
             for name in ("battle", "find", "attack"):
+                if name == "battle" and self._battle_menu_open():
+                    continue                  # already open (a lost press left it there): go on from Buscar
                 self._click(name)
                 self.sleep(self.step_delay)
             noticed = False
@@ -264,6 +281,9 @@ class Bot:
                 self._check()
                 if self.game.screen_is("scout"):
                     return
+                if self._battle_menu_open():
+                    noticed = True            # Buscar did not take: the menu is still up, press it again
+                    break
                 if self._dismiss_popup():
                     noticed = True            # it swallowed the presses: press them again right away
                     break
@@ -293,7 +313,8 @@ class Bot:
         if self.game.screen_is("results"):
             self.log("Estoy en la pantalla de resultados: pulso Volver")
             self._click("back")
-        self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True, results=True)
+        self._wait(lambda: self.game.screen_is("home") or self._battle_menu_open(), "pantalla de inicio", "home",
+                   popups=True, results=True)
         self._phase("search")
         self_starts = 0
         self._open_search()
@@ -589,6 +610,10 @@ class Bot:
                 if self.game.screen_is("home"):
                     self._close_leftover_menu()
                     return
+                if self._battle_menu_open():
+                    # Nothing to close: the next cycle goes on from Buscar batalla, which is where the bot was heading.
+                    self.log("El menu de Batalla esta abierto: sigo desde ahi")
+                    return
                 if self._dismiss_popup():
                     self._nap(self.step_delay)
                     continue
@@ -654,10 +679,11 @@ class Bot:
                 self._reload_if_disconnected()
                 if not self.dry_run:
                     self._close_leftover_menu()      # so the storage bars are readable
-                self.spend_free_slots()              # counters to 0 before attacking (the first attack too)
-                if not self.dry_run:
-                    self._close_leftover_menu()      # a menu left open would hide the storage bars
-                self.wait_if_full()                  # then, if the storages are still full, wait for room
+                if not self._battle_menu_open():     # the panel over the village would make every tap a lottery
+                    self.spend_free_slots()          # counters to 0 before attacking (the first attack too)
+                    if not self.dry_run:
+                        self._close_leftover_menu()  # a menu left open would hide the storage bars
+                    self.wait_if_full()              # then, if the storages are still full, wait for room
             except _Stuck as e:
                 self.log(str(e))
                 stuck = e

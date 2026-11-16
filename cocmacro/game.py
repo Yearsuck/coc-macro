@@ -96,6 +96,10 @@ class RealGame:
         return (f"{'; '.join(parts)}. Ventana {self.win.client_w}x{self.win.client_h}, "
                 f"brillo medio {int(frame.mean())}")
 
+    def battle_menu_open(self) -> bool:
+        """The Batalla menu (Multijugador / Un jugador / Practica tabs over the left half of the village) is up."""
+        return self._has(frames.grab(self.win), "battle_menu")
+
     def close_menu(self) -> bool:
         """Something a stopped routine left open: an upgrade window first (its own X), then the Construir menu.
         The menu's X is pressed only where it really is (the corner is the gold bar when no menu is open and

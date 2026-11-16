@@ -806,3 +806,118 @@ def test_waiting_for_a_builder_is_announced_to_the_window():
     bot = Bot(g, config.Config(mode="walls"), logs.append, stop, sleep=lambda s: None, on_phase=phases.append)
     bot.spend_free_slots()
     assert phases[:2] == ["wait_builder", "upgrade"]
+
+
+# ── the Batalla menu left open (live 2026-11-16: two stuck cycles of 4 minutes on the walls account) ──
+
+class MenuGame(ModeGame):
+    """The Batalla menu is a full-height panel over the left half: it hides the Batalla button, so the village is
+    not 'home' while it is up. `menu_swallows` presses of Buscar are lost and leave it open."""
+
+    def __init__(self, menu_open=True, menu_swallows=0, **kw):
+        super().__init__(**kw)
+        self.menu, self.swallows = menu_open, menu_swallows
+
+    def battle_menu_open(self):
+        return self.menu
+
+    def screen_is(self, name):
+        if name == "home" and self.menu:
+            return False
+        return super().screen_is(name)
+
+    def click_button(self, name):
+        if name == "battle":
+            self.menu = True
+            self.clicks.append(name)
+            return
+        if name == "find" and self.menu:
+            self.clicks.append(name)
+            if self.swallows > 0:
+                self.swallows -= 1
+                return
+            self.menu = False
+            self.screen = "clouds"            # Buscar batalla goes to the search screen, never back to the village
+            return
+        if name == "attack" and self.menu:
+            self.clicks.append(name)             # the panel is over the village: Atacar is not there to press
+            return
+        super().click_button(name)
+
+
+def test_a_search_whose_buscar_press_was_lost_presses_it_again_instead_of_waiting_for_loading():
+    """The menu is still up, so the village is not 'home': that used to be taken for 'loading a village'."""
+    g = MenuGame(menu_open=False, menu_swallows=1)
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks.count("find") == 2 and g.deployed == 1
+    assert any("repito" in m for m in logs)
+
+
+def test_a_cycle_that_starts_with_the_menu_already_open_goes_on_from_there():
+    g = MenuGame(menu_open=True)
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks[:2] == ["find", "attack"]          # no Batalla press: the menu is already there
+    assert g.deployed == 1
+
+
+def test_the_recovery_stops_when_it_finds_the_menu_open_and_clicks_nothing():
+    g = MenuGame(menu_open=True)
+    bot, logs, _ = make(g)
+    bot._recover("atasco")
+    assert g.clicks == [] and any("menu de Batalla" in m for m in logs)
+
+
+def test_nothing_is_spent_with_the_menu_over_the_village():
+    """The walls routine taps the village: with the panel over half of it that is a lottery."""
+    g = MenuGame(menu_open=True, slots=[{"builders": 1}], levels=[{"gold": True, "elixir": False}])
+    bot, _, stop = make(g, mode="walls")
+    _stop_after_first_attack(bot, stop)
+    bot.run()
+    assert g.upgrades == [] and g.deployed == 1
+
+
+def test_a_game_that_cannot_see_the_menu_waits_for_loading_as_before():
+    """Without the check (an older backend, or a template that does not match) a lost press of Buscar is again taken
+    for 'loading': that is the behaviour before this change, and it ends in the timeout it always did."""
+    g = MenuGame(menu_open=False, menu_swallows=1)
+    g.battle_menu_open = None                          # the optional method is not there
+    bot, _, _ = make(g)
+    bot.timeout_s = 3
+    assert bot.run_once() is False
+    assert g.clicks == ["battle", "find", "attack"]
+
+
+def test_a_search_that_never_takes_gives_up_after_three_presses_of_buscar():
+    g = MenuGame(menu_open=False, menu_swallows=99)
+    bot, logs, _ = make(g)
+    assert bot.run_once() is False
+    assert g.clicks.count("find") == 3 and g.clicks.count("battle") == 1       # Batalla only once: the menu stayed up
+    assert any("La busqueda no arranco tras 3 intentos" in m for m in logs)
+
+
+def test_with_everything_full_and_the_menu_up_the_bot_attacks_once_instead_of_waiting():
+    """Known and accepted: the panel hides the storage bars and half the village, so it neither waits for room nor taps
+    walls; one attack closes the menu and the next cycle is a normal one."""
+    g = MenuGame(menu_open=True, full=[True], slots=[{"builders": 1}], levels=[{"gold": True, "elixir": True}])
+    bot, _, stop = make(g, mode="walls", stop_when_full=True)
+    _stop_after_first_attack(bot, stop)
+    bot.run()
+    assert g.deployed == 1 and g.upgrades == []
+
+
+def test_a_menu_that_never_closes_keeps_the_recoveries_counting_and_never_ends_the_run():
+    g = MenuGame(menu_open=False, menu_swallows=10**6)
+    logs, stop = [], threading.Event()
+    bot = Bot(g, config.Config(), logs.append, stop, sleep=lambda s: None)
+    real = g.click_button
+
+    def watch(name):
+        real(name)
+        if g.clicks.count("find") >= 9:
+            stop.set()
+    g.click_button = watch
+    bot.run()
+    assert bot.recoveries_done >= 2 and bot.attacks_done == 0
+    assert sum("El menu de Batalla esta abierto" in m for m in logs) >= 2
