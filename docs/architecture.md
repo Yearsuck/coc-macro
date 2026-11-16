@@ -150,9 +150,11 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
 - **`cocmacro/bot.py`**: Core automation state machine.
   - *State Machine (`bot:Bot`)*: Runs in a dedicated background worker thread. Cycles through phases: `search` → `evaluate` → `deploy` → `watch` → `surrender` → `back`; the `upgrade` phase (between-attack upgrade modes) runs first, before each search.
   - *Decoupled Protocol (`bot:Game`)*: Defines the interface required by the bot (`screen_is`, `click_button`, `read_resources`, `read_damage`, `read_time_left`, `play_deployment`, `reload_if_disconnected`, etc.), enabling unit testing with `FakeGame` without OS dependencies.
-  - *Safe Reading & Retries (`bot:_stable_read`)*: Requires two consecutive matching reads separated by `READ_GAP = 0.4s` to avoid reading during number roll animations. If loot cannot be read across `unreadable_limit = 5` consecutive villages, the bot aborts and dumps debug frames.
-  - *Inactivity Recovery (`bot:_reload_if_disconnected`)*: Detects the "disconnected due to inactivity" dialog, clicks "VOLVER A CARGAR", and waits up to 300 seconds for the village to reload.
-  - *Storage & Builder Spending Modes (`bot:spend_free_slots`, `bot:wait_if_full`)*: In "busy" mode, consumes free builders, researchers, and pets on the cheapest upgrades before attacking. In "walls" mode, consumes surplus builders while keeping exactly 1 builder free for wall upgrades. When storages are full, pauses attacks until space is created or upgrades are started.
+  - *Safe Reading & Retries (`bot:_stable_read`)*: Requires two consecutive matching reads separated by `READ_GAP = 0.4s` to avoid reading during number roll animations. A village that cannot be read is given up after `MAX_READ_TRIES = 4` tries (about 3 s) and skipped; after `unreadable_limit = 5` consecutive unreadable villages the cycle raises `_Stuck` (debug frames are dumped) and the main loop recovers and searches again.
+  - *Dialog Recovery (`bot:_reload_if_disconnected`, `game:reload_dialog`, `vision:native_dialog`)*: Detects the "disconnected due to inactivity" dialog by its text, and any other Android dialog of the same family by shape (flat dark box, pale-blue text button), presses its button and waits up to 300 seconds for the village to reload. Checked between attacks and every 5 s while waiting.
+  - *Stuck Recovery (`bot:_Stuck`, `bot:_recover`, `bot:run`)*: Timeouts raise `_Stuck` instead of ending the run. `run` saves a capture, calls `_recover` (dialog, notice, open menu, results, confirmation, scout / battle -> back to the village) and continues, pausing 30 s x recoveries in a row (max 300 s). Only `_Abort` (F8) and a lost window end the run.
+  - *Search Robustness (`bot:_next_village`, `game:click_button`)*: A press of `Siguiente` is verified (the button must disappear) and repeated at a nudged point otherwise; a battle that starts by itself when the scout countdown ends is ended and the search reopened.
+  - *Storage & Builder Spending Modes (`bot:spend_free_slots`, `bot:wait_if_full`)*: In "busy" mode, consumes free builders, researchers, and pets on the cheapest upgrades before attacking. In "walls" mode, consumes surplus builders while keeping exactly 1 builder free, and runs the wall routine only when the gold or the elixir storage is full (`bot:_any_storage_full`, `game:storage_levels`), waiting for a builder if none is free. In the other modes, when storages are full, pauses attacks until space is created or upgrades are started.
 - **`cocmacro/game.py`**: Concrete implementation of `bot.Game`.
   - *`game:RealGame`*: Bridges `bot.Bot` with `winctl`, `frames`, `ocr`, `templates`, and `vision`.
   - *Screen Identification (`game:RealGame.screen_is`)*: Matches screen templates (`SCREEN_TEMPLATES`: `home` -> `battle`, `scout` -> `next`, `confirm` -> `ok`, `results` -> `back`). The `battle` screen is identified by the presence of `surrender` or `end` and the absence of `next`.
@@ -206,7 +208,7 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
   - *Palette & Components (`theme:card`, `theme:label`, `theme:button`, `theme:entry`, `theme:apply_ttk_style`)*: Dark theme color palette (dark background `#14181f`, card background `#1d232d`, gold accent `#f2c14e`, green `#238636`, danger `#c93c37`). Configures TTK styles for dark Comboboxes and Scrollbars.
 - **`cocmacro/__main__.py`**: Application entry point.
   - Calls `cocmacro.gui.main()`, which verifies the Supercell warning acceptance flag (`data/accepted.flag`) before starting the Tk event loop.
-- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.10.6"`.
+- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.11.0"`.
 
 ### 2.7 Updater and Preflight
 - **`cocmacro/preflight.py`**: Launch readiness verification.
@@ -242,7 +244,7 @@ The attack loop executes continuously in a background thread for each active acc
  3. Scouting & Loot Evaluation Loop
     ├── Wait for scout screen (detected by 'next' button)
     ├── Read gold and elixir twice for stability (READ_GAP = 0.4s)
-    ├── If loot unreadable: skip the village (`Siguiente`) up to 5 consecutive unreadable times, then abort & dump debug frame
+    ├── If loot unreadable: skip the village (`Siguiente`) up to 5 consecutive unreadable times, then dump a debug frame, go back to the village and start over
     ├── Evaluate should_attack(gold, elixir, cfg):
     │     ├── If gold > gold_min AND elixir > elixir_min: BREAK loop -> ATTACK
     │     └── Else: click Siguiente (next) and repeat scout loop

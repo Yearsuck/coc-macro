@@ -16,6 +16,11 @@ DEBUG_KEEP = 60     # newest debug images kept
 # (measured live), so the press tries a few nearby points, keeping the focus, until the dialog is gone.
 RELOAD_TAP_OFFSETS = ((0.0, 0.0), (0.0, 0.005), (0.0, -0.005), (0.015, 0.005), (-0.015, 0.005), (0.0, 0.010))
 RELOAD_TAP_POLLS, RELOAD_TAP_POLL_S = 4, 0.5      # looks (2 s) at the dialog after each tap
+# A repeated press of one button moves by these offsets (about 10 x 4 px at 1296 x 729: inside any button).
+PRESS_NUDGES = ((0.0, 0.0), (0.008, 0.006), (-0.008, -0.006), (0.008, -0.006), (-0.008, 0.006))
+SEARCH_BACK_AT = (0.055, 0.905)     # where the search screen draws its Volver button
+DIALOG_CONFIRM_S = 0.3   # an unknown dialog must still be there after this long before it is pressed
+REPEAT_PRESS_S = 8      # a press this soon after the last one of the same button counts as repeated
 INACTIVITY_TEMPLATES = (("reload_inactive_title", 0.80), ("reload_inactive_body", 0.75))
 
 
@@ -65,6 +70,7 @@ class RealGame:
                  stop: threading.Event, tpl_dir: Path, debug_dir: Path | None = None):
         self.win, self.cfg, self.recording, self.stop, self.tpl_dir = win, cfg, recording, stop, Path(tpl_dir)
         self.debug_dir = Path(debug_dir) if debug_dir else None
+        self._last_button, self._last_press_at, self._presses = "", 0.0, 0
 
     def _has(self, frame, name: str) -> bool:
         return templates.match(frame, name, self.tpl_dir)
@@ -108,6 +114,18 @@ class RealGame:
         winctl.click(self.win, bx, by)
         return True
 
+    def cancel_search(self) -> bool:
+        """The search screen (clouds) with its Volver button: 'Buscando rivales...' that never ends, or 'No se
+        ha podido atacar esta aldea. Intentalo mas tarde' after a connection problem (live 2026-11-15: the bot
+        sat on it until the wait ran out). Press Volver where it is. True if pressed."""
+        found = templates.score(frames.grab(self.win), "search_back", self.tpl_dir)
+        if found is None or found[0] < templates.threshold_for("search_back"):
+            return False
+        if abs(found[1][0] - SEARCH_BACK_AT[0]) > templates.POS_TOL or abs(found[1][1] - SEARCH_BACK_AT[1]) > templates.POS_TOL:
+            return False
+        winctl.click(self.win, found[1][0], found[1][1])
+        return True
+
     def dismiss_popup(self) -> bool:
         """A 'Vale' button on screen (star bonus after a win) is pressed where it is. True if pressed."""
         found = templates.score(frames.grab(self.win), "ok", self.tpl_dir)
@@ -115,6 +133,21 @@ class RealGame:
             return False
         winctl.click(self.win, found[1][0], found[1][1])
         return True
+
+    def _reload_dialog_info(self, frame=None) -> tuple[tuple[float, float] | None, bool]:
+        """((x, y) of the button to press or None, is it the inactivity dialog). The inactivity dialog is
+        known by its text. Any other dialog is found by shape only, so it must be there in two looks a moment
+        apart: a passing screen that happens to match must not get the game tapped."""
+        if frame is None:
+            frame = frames.grab(self.win)
+        is_inactivity = all(templates.match(frame, name, self.tpl_dir, threshold)
+                            for name, threshold in INACTIVITY_TEMPLATES)
+        if is_inactivity:
+            return (self.cfg.buttons["reload_inactive"], True)
+        if vision.native_dialog(frame) is None:
+            return (None, False)
+        time.sleep(DIALOG_CONFIRM_S)
+        return (vision.native_dialog(frames.grab(self.win)), False)
 
     def inactivity_dialog(self) -> bool:
         """The 'Estas ahi? Se te ha desconectado por inactividad' dialog is on screen. Its title AND its body
@@ -125,13 +158,29 @@ class RealGame:
         return all(templates.match(frame, name, self.tpl_dir, threshold)
                    for name, threshold in INACTIVITY_TEMPLATES)
 
+    def reload_dialog(self) -> tuple[float, float] | None:
+        """The inactivity dialog -> cfg.buttons["reload_inactive"]; otherwise any native dialog
+        (vision.native_dialog) -> centre of its blue button; otherwise None."""
+        pt, _ = self._reload_dialog_info()
+        return pt
+
+    def any_dialog(self) -> bool:
+        """True if any reload / native dialog is on screen."""
+        return self.reload_dialog() is not None
+
     def reload_if_disconnected(self) -> bool:
-        """Press VOLVER A CARGAR if the inactivity dialog is visible. True if pressed. The taps go through
+        """Press the reload / retry button on any native dialog. True if pressed. The taps go through
         winctl.click, which marks this window as the active instance first (the host forwards input to the
         active instance only), so the user's keyboard focus is never touched."""
-        if not self.inactivity_dialog():
+        dialog_point, is_inactivity = self._reload_dialog_info()
+        if dialog_point is None:
             return False
-        x, y = self.cfg.buttons["reload_inactive"]
+        x, y = dialog_point
+        if not is_inactivity:
+            try:
+                self.dump_debug("dialog")        # the only way to get a sample of a dialog never seen before
+            except Exception:
+                pass                             # a full disk must not leave the dialog unpressed
         with winctl.exclusive_input(self.stop) as got:
             if not got:                          # stopped while waiting for the other account
                 return True
@@ -141,13 +190,21 @@ class RealGame:
                 winctl.click(self.win, x + dx, y + dy)
                 for _ in range(RELOAD_TAP_POLLS):
                     time.sleep(RELOAD_TAP_POLL_S)
-                    if self.stop.is_set() or not self.inactivity_dialog():
+                    if self.stop.is_set() or self.reload_dialog() is None:
                         return True
         return True
 
     def click_button(self, name: str) -> None:
+        """Press a calibrated button. The same button pressed again within REPEAT_PRESS_S is pressed at a
+        point a few pixels away: the host can ignore a tap that lands where the last one did (live: four
+        presses of Siguiente in a row at one point did nothing, then a button elsewhere worked at once)."""
         x, y = self.cfg.buttons[name]
-        winctl.click(self.win, x, y)
+        now = time.monotonic()
+        repeated = name == self._last_button and now - self._last_press_at < REPEAT_PRESS_S
+        self._presses = self._presses + 1 if repeated else 0
+        self._last_button, self._last_press_at = name, now
+        dx, dy = PRESS_NUDGES[self._presses % len(PRESS_NUDGES)]
+        winctl.click(self.win, x + dx, y + dy)
 
     def read_resources(self) -> tuple[int | None, int | None]:
         frame = frames.grab(self.win)
@@ -160,16 +217,22 @@ class RealGame:
     def read_time_left(self) -> int | None:
         return ocr.read_time_left(frames.grab(self.win), self.cfg.regions["timer"])
 
+    def storage_levels(self) -> dict[str, bool | None]:
+        """Individual storage readings: gold, elixir, and dark (None when there is no dark region)."""
+        frame = frames.grab(self.win)
+        gold = vision.storage_full(frame, self.cfg.regions.get("storage_gold"), hue=GOLD_HUE)
+        elixir = vision.storage_full(frame, self.cfg.regions.get("storage_elixir"), hue=ELIXIR_HUE)
+        region = self.cfg.regions.get("storage_dark")
+        dark = vision.dark_storage_full(frame, region) if region else None
+        return {"gold": gold, "elixir": elixir, "dark": dark}
+
     def storages_full(self) -> bool | None:
         """Gold, elixir AND dark elixir storages full. A clear 'not full' wins over an unreadable one. The dark
         elixir bar is optional only in config: with no `storage_dark` region it is ignored (gold and elixir decide)
         and an unreadable bar (None) is ignored too. An account WITHOUT a dark elixir bar is not detected: the
         region then shows other pixels and reads as 'not full', so such an account never waits on full storages."""
-        frame = frames.grab(self.win)
-        gold = vision.storage_full(frame, self.cfg.regions["storage_gold"], hue=GOLD_HUE)
-        elixir = vision.storage_full(frame, self.cfg.regions["storage_elixir"], hue=ELIXIR_HUE)
-        region = self.cfg.regions.get("storage_dark")
-        dark = vision.dark_storage_full(frame, region) if region else None
+        levels = self.storage_levels()
+        gold, elixir, dark = levels["gold"], levels["elixir"], levels["dark"]
         if gold is False or elixir is False or dark is False:
             return False
         return True if gold is True and elixir is True else None

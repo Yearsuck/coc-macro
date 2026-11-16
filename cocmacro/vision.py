@@ -16,7 +16,24 @@ __all__ = [
     "dark_storage_full",
     "free_count",
     "cost_is_red",
+    "native_dialog",
 ]
+
+# --- native_dialog thresholds (from the inactivity dialog crop; no server-error capture exists yet) ---
+DIALOG_BGR = (30, 28, 25)  # dark grey/brown of the dialog box
+DIALOG_TOL = 8             # channel tolerance for dialog dark pixels
+DIALOG_MIN_W_FRAC = 0.25   # width 25%-75% of the frame
+DIALOG_MAX_W_FRAC = 0.75
+DIALOG_MIN_H_FRAC = 0.12   # height 12%-60% of the frame
+DIALOG_MAX_H_FRAC = 0.60
+DIALOG_CENTRE_MIN = 0.35   # centre within 0.35-0.65 in both axes
+DIALOG_CENTRE_MAX = 0.65
+DIALOG_MIN_FILL_FRAC = 0.75 # at least 75% of bounding box must be mask pixels
+DIALOG_LOWER_FRAC = 0.40   # button text is searched in the lower 40% of the box
+DIALOG_BUTTON_B_MIN = 150  # blue text pixels: B >= 150
+DIALOG_BUTTON_BR_MIN = 20  # B - R >= 20
+DIALOG_BUTTON_R_MAX = 215  # R <= 215 (filters out near-white text)
+DIALOG_BUTTON_MIN_PX = 150 # at least 150 blue text pixels
 
 
 def _valid(frame, region: Region) -> bool:
@@ -56,6 +73,8 @@ def storage_full(frame: np.ndarray, region: Region, hue: tuple[int, int] | None 
     if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
         return None
     if frame.shape[0] < 10 or frame.shape[1] < 10:
+        return None
+    if not region or len(region) != 4:
         return None
     x0, y0, x1, y1 = region
     if x1 <= x0 or y1 <= y0:
@@ -242,3 +261,92 @@ def first_upgrade_row(frame: np.ndarray) -> tuple[float, float] | None:
                 return (ROW_X, centre) if centre <= ROW_Y_MAX else None
             start = None
     return None
+
+
+def native_dialog(frame) -> tuple[float, float] | None:
+    """Find a native Android dialog (inactivity, server error) by shape and return the relative
+    (0-1) centre of its blue text button, or None if no dialog is found.
+
+    Thresholds come from the measurements of F7 (inactivity dialog crop; no server-error capture exists yet).
+    """
+    if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
+        return None
+    h, w = frame.shape[:2]
+    if h < 10 or w < 10:
+        return None
+
+    # mask of "dialog dark" pixels = every channel within DIALOG_TOL of DIALOG_BGR
+    px = frame.astype(np.int16)
+    b, g, r = px[..., 0], px[..., 1], px[..., 2]
+    dark_mask = (
+        (np.abs(b - DIALOG_BGR[0]) <= DIALOG_TOL)
+        & (np.abs(g - DIALOG_BGR[1]) <= DIALOG_TOL)
+        & (np.abs(r - DIALOG_BGR[2]) <= DIALOG_TOL)
+    ).astype(np.uint8) * 255
+
+    # largest connected component
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(dark_mask)
+    if n < 2:
+        return None
+    best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    bx = stats[best, cv2.CC_STAT_LEFT]
+    by = stats[best, cv2.CC_STAT_TOP]
+    bw = stats[best, cv2.CC_STAT_WIDTH]
+    bh = stats[best, cv2.CC_STAT_HEIGHT]
+
+    # size check: width 25%-75%, height 12%-60%
+    if not (DIALOG_MIN_W_FRAC <= bw / w <= DIALOG_MAX_W_FRAC):
+        return None
+    if not (DIALOG_MIN_H_FRAC <= bh / h <= DIALOG_MAX_H_FRAC):
+        return None
+
+    # centre check: centre within 0.35-0.65 of the frame in both axes
+    cx = (bx + bw / 2.0) / w
+    cy = (by + bh / 2.0) / h
+    if not (DIALOG_CENTRE_MIN <= cx <= DIALOG_CENTRE_MAX and DIALOG_CENTRE_MIN <= cy <= DIALOG_CENTRE_MAX):
+        return None
+
+    # fill check: at least 75% of the bounding box must be mask pixels
+    box_mask = dark_mask[by:by + bh, bx:bx + bw]
+    if float(np.mean(box_mask > 0)) < DIALOG_MIN_FILL_FRAC:
+        return None
+
+    # inside the lower 40% of that box look for "button blue" text pixels
+    lower_top = by + int(bh * (1.0 - DIALOG_LOWER_FRAC))
+    lower = frame[lower_top:by + bh, bx:bx + bw]
+    if lower.size == 0:
+        return None
+
+    lb = lower[..., 0].astype(np.int16)
+    lg = lower[..., 1].astype(np.int16)
+    lr = lower[..., 2].astype(np.int16)
+
+    blue_mask = (
+        (lb >= DIALOG_BUTTON_B_MIN)
+        & (lb > lg)
+        & (lg > lr)
+        & ((lb - lr) >= DIALOG_BUTTON_BR_MIN)
+        & (lr <= DIALOG_BUTTON_R_MAX)
+    )
+    if not np.any(blue_mask):
+        return None
+
+    # dilate the blue mask with a 15x5 px rectangle (cv2.dilate) so the letters of one line join
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
+    dilated = cv2.dilate(blue_mask.astype(np.uint8) * 255, kernel)
+
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(dilated)
+    if n_labels < 2:
+        return None
+
+    # A cluster is a button when it holds enough ORIGINAL (undilated) blue pixels. With two buttons
+    # (CANCELAR / REINTENTAR) the rightmost is taken: Android puts the affirmative action on the right.
+    buttons = [i for i in range(1, n_labels)
+               if int(np.count_nonzero(blue_mask & (labels == i))) >= DIALOG_BUTTON_MIN_PX]
+    if not buttons:
+        return None
+    best = max(buttons, key=lambda i: stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH])
+    comp_ys, comp_xs = np.nonzero(blue_mask & (labels == best))
+    btn_cx = (bx + float(comp_xs.min() + comp_xs.max()) / 2.0) / w
+    btn_cy = (lower_top + float(comp_ys.min() + comp_ys.max()) / 2.0) / h
+    return (btn_cx, btn_cy)
