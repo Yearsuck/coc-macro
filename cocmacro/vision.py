@@ -194,6 +194,13 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
 
 
 WALL_HSV_LOW, WALL_HSV_HIGH = (85, 25, 110), (110, 95, 215)    # steel-blue walls, measured on real captures
+# Walls of a high level are drawn gold and cream (live 2026-11-16: a 55 000 px block of them was invisible to the blue
+# range and walls mode never upgraded anything). Gold is common in a village (buildings, the Batalla button, sand
+# skins), so it is only a fallback for when no blue block exists, and a "block" of it that covers a big share of the
+# screen is terrain, not walls.
+GOLD_WALL_HSV_LOW, GOLD_WALL_HSV_HIGH = (15, 60, 150), (35, 255, 255)
+GOLD_WALL_MAX_SHARE = 0.20
+GOLD_WALL_DOMINANCE = 3     # gold beats a blue block only when it is this many times bigger (blue clutter, e.g. ice buildings, is not walls)
 WALL_MIN_AREA = 8000                                            # px at 1296 wide; the block is 25 000+
 HUD_ZONES = (                  # the game's own buttons: never click a wall spot inside them
     (0.78, 0.0, 1.0, 0.33),    # resource bars, gems, shield timer
@@ -205,20 +212,38 @@ HUD_ZONES = (                  # the game's own buttons: never click a wall spot
 WALL_RISE_PX = 14                                               # click this far above the block's lowest point
 
 
-def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
-    """Relative (x, y) of a wall just above the lowest point of the big block of walls, wherever the camera
-    is. None when no block is on screen. The player starts from the lower edge and works upwards."""
-    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[0] < 10 or frame.shape[1] < 10:
-        return None
-    mask = cv2.inRange(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV), WALL_HSV_LOW, WALL_HSV_HIGH)
+def _wall_block(frame: np.ndarray, low, high, max_share: float | None = None):
+    """(labels, index, area) of the biggest blob of pixels in the colour range that is big enough to be the wall
+    block, else None. `max_share` rejects a blob covering more than that share of the frame."""
+    mask = cv2.inRange(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV), low, high)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     if n < 2:
         return None
     best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    if stats[best, cv2.CC_STAT_AREA] < WALL_MIN_AREA * (frame.shape[1] / 1296) ** 2:
+    area = stats[best, cv2.CC_STAT_AREA]
+    if area < WALL_MIN_AREA * (frame.shape[1] / 1296) ** 2:
         return None
+    if max_share is not None and area > max_share * frame.shape[0] * frame.shape[1]:
+        return None
+    return labels, best, int(area)
+
+
+def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
+    """Relative (x, y) of a wall just above the lowest point of the big block of walls, wherever the camera
+    is. None when no block is on screen. The player starts from the lower edge and works upwards."""
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[0] < 10 or frame.shape[1] < 10:
+        return None
+    blue = _wall_block(frame, WALL_HSV_LOW, WALL_HSV_HIGH)
+    gold = _wall_block(frame, GOLD_WALL_HSV_LOW, GOLD_WALL_HSV_HIGH, GOLD_WALL_MAX_SHARE)
+    # Blue is the case that was always verified: it wins unless gold is clearly the wall block (live: a 55 000 px
+    # gold block next to a 6 500 px blue clump of ice buildings).
+    use_gold = gold is not None and (blue is None or gold[2] > GOLD_WALL_DOMINANCE * blue[2])
+    found = gold if use_gold else blue
+    if found is None:
+        return None
+    labels, best, _ = found
     ys, xs = np.nonzero(labels == best)
     low = ys.max()
     x = float(xs[ys >= low - 4].mean())
