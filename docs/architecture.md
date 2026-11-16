@@ -208,7 +208,7 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
   - *Palette & Components (`theme:card`, `theme:label`, `theme:button`, `theme:entry`, `theme:apply_ttk_style`)*: Dark theme color palette (dark background `#14181f`, card background `#1d232d`, gold accent `#f2c14e`, green `#238636`, danger `#c93c37`). Configures TTK styles for dark Comboboxes and Scrollbars.
 - **`cocmacro/__main__.py`**: Application entry point.
   - Calls `cocmacro.gui.main()`, which verifies the Supercell warning acceptance flag (`data/accepted.flag`) before starting the Tk event loop.
-- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.11.0"`.
+- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.11.1"`.
 
 ### 2.7 Updater and Preflight
 - **`cocmacro/preflight.py`**: Launch readiness verification.
