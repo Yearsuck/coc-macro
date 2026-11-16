@@ -44,6 +44,55 @@ def _valid(frame, region: Region) -> bool:
     return region[2] > region[0] and region[3] > region[1]
 
 
+ITEM_BUTTON_HSV = ((100, 190, 150), (112, 255, 255))     # the blue "upgrade with an item" button of the wall bar
+ITEM_BUTTON_BAND = (0.76, 0.86)                           # rows of the bar, relative
+ITEM_BUTTON_MIN_W = 0.03                                  # narrowest run of blue columns that is a button, relative
+ITEM_BUTTON_MIN_COVER = 0.08                              # share of the band rows a column needs to be blue: the button is a blue frame round a pale middle
+
+
+def item_button_span(frame) -> tuple[float, float] | None:
+    """Relative (x0, x1) of the blue 'upgrade with an item' button in the bar of a selected wall, None when there is
+    none. Pressing it spends a wall ring, not the resource the user chose, so the bot checks the spot it is about to
+    press against this instead of trusting the layout it measured (live: measured on a real bar, columns
+    0.666-0.735; nothing else in the bar reaches that saturation)."""
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3 or frame.shape[0] < 10:
+        return None
+    h, w = frame.shape[:2]
+    band = cv2.cvtColor(frame[int(ITEM_BUTTON_BAND[0] * h):int(ITEM_BUTTON_BAND[1] * h)], cv2.COLOR_BGR2HSV)
+    cols = ((cv2.inRange(band, *ITEM_BUTTON_HSV) > 0).mean(axis=0) >= ITEM_BUTTON_MIN_COVER).astype(np.uint8)
+    cols = cv2.morphologyEx(cols[None, :], cv2.MORPH_CLOSE, np.ones((1, 31), np.uint8))[0]    # the icon and the label cut the blue
+    best, start = None, None
+    for x in range(w + 1):
+        on = x < w and cols[x]
+        if on and start is None:
+            start = x
+        elif not on and start is not None:
+            if x - start >= ITEM_BUTTON_MIN_W * w and (best is None or x - start > best[1] - best[0]):
+                best = (start, x)
+            start = None
+    return None if best is None else (best[0] / w, best[1] / w)
+
+
+REGION_CHANGE_MIN = 6000     # summed |difference| of a region that means "something was redrawn" (see region_changed)
+
+
+def region_crop(frame, region: Region) -> np.ndarray | None:
+    """The pixels of a region, to compare two looks with `region_changed`. None when the frame is not an image
+    (a test double) or the region is empty: 'cannot tell', never 'unchanged'."""
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3:
+        return None
+    crop = ocr._crop(frame, region)
+    return crop.astype(np.int16) if crop.size else None
+
+
+def region_changed(before: np.ndarray, after: np.ndarray) -> bool:
+    """Did the text in a region change between two looks? A gold button glitters: identical prices differ by
+    ~2 000 summed (live: 0.03-0.32 per pixel over 21 x 97 px), while a changed number moves tens of thousands."""
+    if before.shape != after.shape:
+        return True
+    return int(np.abs(after - before).sum()) >= REGION_CHANGE_MIN
+
+
 def cost_is_red(frame: np.ndarray, region: Region) -> bool:
     """True if the price in `region` is in the game's 'cannot pay' colour. Digits are either white (payable) or
     salmon (not payable, about 255,110,110), so the red pixels are compared with the white ones (at least half as
@@ -194,6 +243,13 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
 
 
 WALL_HSV_LOW, WALL_HSV_HIGH = (85, 25, 110), (110, 95, 215)    # steel-blue walls, measured on real captures
+# Walls of a high level are drawn gold and cream (live 2026-11-16: a 55 000 px block of them was invisible to the blue
+# range and walls mode never upgraded anything). Gold is common in a village (buildings, the Batalla button, sand
+# skins), so it is only a fallback for when no blue block exists, and a "block" of it that covers a big share of the
+# screen is terrain, not walls.
+GOLD_WALL_HSV_LOW, GOLD_WALL_HSV_HIGH = (15, 60, 150), (35, 255, 255)
+GOLD_WALL_MAX_SHARE = 0.20
+GOLD_WALL_DOMINANCE = 3     # gold beats a blue block only when it is this many times bigger (blue clutter, e.g. ice buildings, is not walls)
 WALL_MIN_AREA = 8000                                            # px at 1296 wide; the block is 25 000+
 HUD_ZONES = (                  # the game's own buttons: never click a wall spot inside them
     (0.78, 0.0, 1.0, 0.33),    # resource bars, gems, shield timer
@@ -205,20 +261,38 @@ HUD_ZONES = (                  # the game's own buttons: never click a wall spot
 WALL_RISE_PX = 14                                               # click this far above the block's lowest point
 
 
-def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
-    """Relative (x, y) of a wall just above the lowest point of the big block of walls, wherever the camera
-    is. None when no block is on screen. The player starts from the lower edge and works upwards."""
-    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[0] < 10 or frame.shape[1] < 10:
-        return None
-    mask = cv2.inRange(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV), WALL_HSV_LOW, WALL_HSV_HIGH)
+def _wall_block(frame: np.ndarray, low, high, max_share: float | None = None):
+    """(labels, index, area) of the biggest blob of pixels in the colour range that is big enough to be the wall
+    block, else None. `max_share` rejects a blob covering more than that share of the frame."""
+    mask = cv2.inRange(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV), low, high)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     if n < 2:
         return None
     best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    if stats[best, cv2.CC_STAT_AREA] < WALL_MIN_AREA * (frame.shape[1] / 1296) ** 2:
+    area = stats[best, cv2.CC_STAT_AREA]
+    if area < WALL_MIN_AREA * (frame.shape[1] / 1296) ** 2:
         return None
+    if max_share is not None and area > max_share * frame.shape[0] * frame.shape[1]:
+        return None
+    return labels, best, int(area)
+
+
+def find_wall_spot(frame: np.ndarray) -> tuple[float, float] | None:
+    """Relative (x, y) of a wall just above the lowest point of the big block of walls, wherever the camera
+    is. None when no block is on screen. The player starts from the lower edge and works upwards."""
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[0] < 10 or frame.shape[1] < 10:
+        return None
+    blue = _wall_block(frame, WALL_HSV_LOW, WALL_HSV_HIGH)
+    gold = _wall_block(frame, GOLD_WALL_HSV_LOW, GOLD_WALL_HSV_HIGH, GOLD_WALL_MAX_SHARE)
+    # Blue is the case that was always verified: it wins unless gold is clearly the wall block (live: a 55 000 px
+    # gold block next to a 6 500 px blue clump of ice buildings).
+    use_gold = gold is not None and (blue is None or gold[2] > GOLD_WALL_DOMINANCE * blue[2])
+    found = gold if use_gold else blue
+    if found is None:
+        return None
+    labels, best, _ = found
     ys, xs = np.nonzero(labels == best)
     low = ys.max()
     x = float(xs[ys >= low - 4].mean())

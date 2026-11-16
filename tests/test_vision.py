@@ -467,3 +467,99 @@ def test_native_dialog_on_real_dialogs(name, button):
                                   "wall_panel_cost_red", "search_failed"])
 def test_native_dialog_is_not_seen_on_game_screens(name):
     assert vision.native_dialog(cv2.imread(str(FIXTURES / f"{name}.png"))) is None
+
+
+def test_a_block_of_gold_walls_is_found():
+    """Live 2026-11-16: walls of a high level are drawn gold and cream, not steel blue. The detector only knew
+    the blue ones: the log said 'No veo el bloque de muros' with both storages full and a builder free, and
+    walls mode never upgraded anything."""
+    frame = cv2.imread(str(FIXTURES / "wall_block_gold.png"))
+    x, y = vision.find_wall_spot(frame)
+    assert 0.42 <= x <= 0.73 and 0.0 <= y <= 0.41               # inside the golden block, not on a neighbour
+    h, w = frame.shape[:2]
+    hue = cv2.cvtColor(frame[int(y * h) - 2:int(y * h) + 3, int(x * w) - 2:int(x * w) + 3], cv2.COLOR_BGR2HSV)[..., 0]
+    assert 10 <= np.median(hue) <= 35                           # and the pixel under the click is a gold wall
+
+
+def test_blue_walls_still_win_over_gold_things_in_the_same_village():
+    """The gold detector is only a fallback: a village whose block is blue keeps the spot it always had."""
+    frame = cv2.imread(str(FIXTURES / "wall_block_centered_top.png"))
+    x, y = vision.find_wall_spot(frame)
+    assert (round(x, 2), round(y, 2)) == (0.56, 0.63)
+
+
+@pytest.mark.parametrize("why,paint", [
+    ("a whole screen of sand or gold terrain", lambda f: f.__setitem__(slice(None), (60, 190, 230))),
+    ("only a gold button in a corner", lambda f: f.__setitem__((slice(600, 729), slice(0, 130)), (60, 190, 230))),
+])
+def test_gold_that_is_not_a_wall_block_is_ignored(why, paint):
+    frame = np.full((729, 1296, 3), (40, 90, 50), np.uint8)       # green grass
+    paint(frame)
+    assert vision.find_wall_spot(frame) is None, why
+
+
+def _blocks(blue=None, gold=None, size=(729, 1296)):
+    """Grass with a blue block and/or a gold block (x0, y0, x1, y1 in relative terms) painted on it."""
+    f = np.full((*size, 3), (40, 90, 50), np.uint8)
+    h, w = size
+    for colour, box in (((150, 130, 110), blue), ((60, 190, 230), gold)):
+        if box:
+            x0, y0, x1, y1 = box
+            f[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)] = colour
+    return f
+
+
+@pytest.mark.parametrize("why,kwargs,expect", [
+    ("blue block bigger: blue", dict(blue=(0.10, 0.30, 0.40, 0.70), gold=(0.55, 0.30, 0.70, 0.55)), "blue"),
+    ("a gold blob a bit bigger than a blue block is still not enough to switch", dict(blue=(0.10, 0.30, 0.30, 0.55), gold=(0.45, 0.20, 0.70, 0.55)), "blue"),
+    ("a small blue clump next to a big gold block: gold", dict(blue=(0.10, 0.60, 0.18, 0.75), gold=(0.40, 0.05, 0.75, 0.40)), "gold"),
+])
+def test_blue_wins_unless_gold_is_clearly_the_wall_block(why, kwargs, expect):
+    f = _blocks(**kwargs)
+    x, y = vision.find_wall_spot(f)
+    assert (x < 0.5) == (expect == "blue"), why
+
+
+def test_gold_over_a_third_of_the_screen_is_terrain_not_walls():
+    assert vision.find_wall_spot(_blocks(gold=(0.0, 0.0, 0.62, 0.55))) is None      # ~34% of the frame
+
+
+def test_the_wall_block_is_found_at_another_frame_size():
+    """The minimum area scales with the frame: a block that is 6% of the screen is found at any size."""
+    for size in ((535, 951), (450, 800)):
+        assert vision.find_wall_spot(_blocks(gold=(0.30, 0.05, 0.62, 0.35), size=size)) is not None
+
+
+def test_region_changed_ignores_glitter_but_sees_a_new_number():
+    """The gold 'Mejorar' button glitters: two looks at the same price differ by a little."""
+    rng = np.random.default_rng(1)
+    frame = np.full((729, 1296, 3), 120, np.uint8)
+    region = (0.5, 0.74, 0.6, 0.78)
+    a = vision.region_crop(frame, region)
+    noisy = frame.copy()
+    crop_h, crop_w = a.shape[:2]
+    ys, xs = rng.integers(0, crop_h, 5), rng.integers(0, crop_w, 5)
+    noisy[int(0.74 * 729) + ys, int(0.5 * 1296) + xs] = 255            # a few sparkles, about the 2 000 summed that was measured live
+    assert not vision.region_changed(a, vision.region_crop(noisy, region))
+    digits = frame.copy()
+    digits[int(0.745 * 729):int(0.77 * 729), int(0.51 * 1296):int(0.56 * 1296)] = 255   # a different price drawn
+    assert vision.region_changed(a, vision.region_crop(digits, region))
+
+
+def test_region_crop_says_cannot_tell_for_a_non_image():
+    assert vision.region_crop(object(), (0.1, 0.1, 0.2, 0.2)) is None
+    assert vision.region_crop(np.zeros((729, 1296, 3), np.uint8), (0.5, 0.5, 0.5, 0.5)) is None
+
+
+def test_item_button_span_finds_the_blue_button_of_the_real_wall_bar():
+    span = vision.item_button_span(cv2.imread(str(FIXTURES / "wall_bar_six_buttons.png")))
+    assert span is not None and abs(span[0] - 0.666) < 0.01 and abs(span[1] - 0.735) < 0.01
+
+
+@pytest.mark.parametrize("name", ["wall_block_gold", "village_no_menu", "menu_builders_tab_filtered", "storage_bars_full"])
+def test_item_button_span_is_none_on_screens_without_the_bar(name):
+    assert vision.item_button_span(cv2.imread(str(FIXTURES / f"{name}.png"))) is None
+
+
+def test_item_button_span_is_none_for_a_non_image():
+    assert vision.item_button_span(object()) is None

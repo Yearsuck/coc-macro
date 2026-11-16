@@ -144,12 +144,14 @@ def test_walls_normal_upgrade_both_resources(monkeypatch):
     assert names[6] == "wall_up_gold"
     # confirm click at (0.5, 0.9)
     assert names[7] == "(0.500,0.900)"
+    # the view is reset (Construir opened and closed) before the next resource
+    assert names[8:10] == ["build", "build_close"]
     # Elixir clicks
-    assert names[8] == "wall_spot"
-    assert names[9] == "wall_more"
-    assert names[10:13] == ["wall_add1"] * 3
-    assert names[13] == "wall_remove"
-    assert names[14] == "wall_up_elixir"
+    assert names[10] == "wall_spot"
+    assert names[11] == "wall_more"
+    assert names[12:15] == ["wall_add1"] * 3
+    assert names[15] == "wall_remove"
+    assert names[16] == "wall_up_elixir"
 
 
 def test_walls_panel_absent_returns_false(monkeypatch):
@@ -923,3 +925,220 @@ def test_the_price_region_stops_above_the_struck_through_full_price():
     assert _price_region(cfg) == (0.66, 0.84, 0.72, 0.885)
     cfg.regions["upgrade_cost"] = (0.66, 0.84, 0.72, 0.87)          # already short: left alone
     assert _price_region(cfg) == (0.66, 0.84, 0.72, 0.87)
+
+
+# ── the wall bar is centred: an extra button shifts every button of it ──────────
+
+def _run_walls_with_panel_at(monkeypatch, panel_x):
+    """upgrade_walls with 'Marcar fila' found at x = panel_x; returns (clicks by name, regions asked to cost_is_red)."""
+    cfg = _cfg()
+    regions, counters = [], {"n": 0}
+
+    def cost(_frame, region):
+        regions.append(region)
+        counters["n"] += 1
+        return counters["n"] % 3 == 0                 # red on every third look: add, add, add -> red -> remove
+
+    monkeypatch.setattr(vision, "cost_is_red", cost)
+    scr = FakeScreen(has_templates={"wall_panel": True, "walls_dialog": True},
+                     find_templates={"wall_panel": (panel_x, cfg.buttons["wall_more"][1]), "confirm_upgrade": (0.5, 0.9)})
+    upgrade_walls(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
+    return cfg, scr, regions
+
+
+def test_walls_bar_with_a_sixth_button_moves_every_click_half_a_pitch_left(monkeypatch):
+    """Live 2026-11-16: the blue 'upgrade with an item' button made the bar six buttons wide; they are centred on
+    the screen, so every button moved 0.04 left of where it was calibrated. The clicks fell in the gaps between
+    buttons: 'Mejorar mas' missed, +1 deselected the walls, the gold button was never pressed."""
+    from cocmacro.upgrades import WALL_BAR_PITCH
+    cfg0 = _cfg()
+    marcar_fila_calibrated = cfg0.buttons["wall_more"][0] - WALL_BAR_PITCH
+    shift = -WALL_BAR_PITCH / 2
+    cfg, scr, regions = _run_walls_with_panel_at(monkeypatch, marcar_fila_calibrated + shift + 0.005)   # a little measuring noise
+    for name in ("wall_more", "wall_add1", "wall_remove", "wall_up_gold", "wall_up_elixir"):
+        x, y = cfg.buttons[name]
+        assert any(abs(cx - (x + shift)) < 0.001 and abs(cy - y) < 0.001 for cx, cy in scr.clicks), name
+    gold = cfg.regions["wall_cost_gold"]
+    assert any(abs(r[0] - (gold[0] + shift)) < 0.001 and abs(r[2] - (gold[2] + shift)) < 0.001 for r in regions)
+    assert (0.5, 0.9) in scr.clicks                   # the Vale button is found on screen: never shifted
+
+
+def test_walls_bar_in_its_calibrated_place_is_not_moved(monkeypatch):
+    from cocmacro.upgrades import WALL_BAR_PITCH
+    cfg0 = _cfg()
+    cfg, scr, regions = _run_walls_with_panel_at(monkeypatch, cfg0.buttons["wall_more"][0] - WALL_BAR_PITCH + 0.004)
+    x, y = cfg.buttons["wall_more"]
+    assert (x, y) in scr.clicks
+    assert cfg.regions["wall_cost_gold"] in regions
+
+
+def test_walls_bar_found_somewhere_absurd_is_not_trusted(monkeypatch):
+    """A 'Marcar fila' match far from any possible layout is a false match: use the calibrated places."""
+    cfg, scr, _ = _run_walls_with_panel_at(monkeypatch, 0.95)
+    assert cfg.buttons["wall_more"] in scr.clicks
+
+
+# ── the game stops adding walls at what you can pay: the price never turns red ───
+
+class CappedScreen(FakeScreen):
+    """Real pixels in the price region: they change with each wall added until `cap` and then stay put, like the
+    live game, where '+1' does nothing once the walls cost all you have (the price is not red, 'Anadir' is)."""
+
+    def __init__(self, cap, **kw):
+        super().__init__(**kw)
+        self.cap = cap
+
+    def grab(self):
+        import numpy as np
+        frame = np.zeros((729, 1296, 3), np.uint8)
+        adds = sum(1 for n in self.click_names if n == "wall_add1")
+        frame[int(0.70 * 729):int(0.75 * 729), int(0.30 * 1296):int(0.50 * 1296)] = (min(adds, self.cap) * 3) % 256
+        frame[int(0.70 * 729) + 2, int(0.30 * 1296) + 2] = (adds * 7) % 256        # a sparkle that never stops
+        return frame
+
+
+def test_walls_stop_adding_when_the_price_stops_changing_and_remove_nothing(monkeypatch):
+    """Live 2026-11-16: with 28.5 M gold and 5.6 M a wall the counter stopped at x5 (28 M) and the price stayed white;
+    the routine clicked '+1' 250 times waiting for red and never upgraded anything."""
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    scr = CappedScreen(cap=5, has_templates={"wall_panel": True, "walls_dialog": True},
+                       find_templates={"confirm_upgrade": (0.5, 0.9)})
+    result = upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    names = scr.click_names
+    assert result is True
+    assert names.count("wall_add1") < 12 and "wall_remove" not in names[:names.index("wall_up_gold")]
+    assert names[names.index("wall_up_gold") - 1] == "wall_add1"       # straight from adding to Mejorar
+    assert (0.5, 0.9) in scr.clicks                                    # and the dialog was confirmed
+
+
+def test_walls_keep_adding_while_the_price_keeps_changing(monkeypatch):
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    scr = CappedScreen(cap=9, has_templates={"wall_panel": True, "walls_dialog": True},
+                       find_templates={"confirm_upgrade": (0.5, 0.9)})
+    upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert scr.click_names.count("wall_add1") >= 9                    # not cut short while it still grows
+
+
+def test_walls_with_a_red_price_still_remove_one_as_before(monkeypatch):
+    """Older game versions let you add past what you can pay: the price turns red and one wall comes off."""
+    seen = {"n": 0}
+
+    def red(_f, _r):
+        seen["n"] += 1
+        return seen["n"] == 3
+
+    monkeypatch.setattr(vision, "cost_is_red", red)
+    scr = CappedScreen(cap=99, has_templates={"wall_panel": True, "walls_dialog": True},
+                       find_templates={"confirm_upgrade": (0.5, 0.9)})
+    upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert "wall_remove" in scr.click_names
+
+
+def test_the_real_six_button_wall_bar_measures_a_shift_of_half_a_pitch():
+    """Real capture of the bar of a wall (everything but the bar blacked out): six buttons because of the blue item
+    one. 'Marcar fila' is found where the five-button layout would not have it."""
+    import cv2
+    from pathlib import Path
+    from cocmacro import defaults, templates
+    from cocmacro.upgrades import WALL_BAR_PITCH, _wall_bar_shift
+
+    frame = cv2.imread(str(Path(__file__).parent / "fixtures" / "ui" / "wall_bar_six_buttons.png"))
+    cfg = Config()
+    cfg.buttons["wall_more"] = (0.5, 0.8)             # where the shipped defaults put it (five buttons)
+
+    class RealFind:
+        def find(self, name):
+            found = templates.score(frame, name, defaults.DIR)
+            return found[1] if found and found[0] >= templates.threshold_for(name) else None
+
+    assert _wall_bar_shift(RealFind(), cfg) == pytest.approx(-WALL_BAR_PITCH / 2)
+
+
+# ── review: never press the blue item button, measure with care, cap needs a real change ────
+
+def test_the_bar_is_measured_again_when_a_redraw_hides_marcar_fila_for_a_moment():
+    from cocmacro.upgrades import WALL_BAR_PITCH, _wall_bar_shift
+    cfg = _cfg()
+    looks = iter([None, None, (cfg.buttons["wall_more"][0] - WALL_BAR_PITCH - WALL_BAR_PITCH / 2, cfg.buttons["wall_more"][1])])
+
+    class Flicker:
+        def find(self, _name):
+            return next(looks)
+
+    assert _wall_bar_shift(Flicker(), cfg) == pytest.approx(-WALL_BAR_PITCH / 2)
+
+
+def test_a_marcar_fila_match_off_the_row_of_the_bar_is_another_icon():
+    from cocmacro.upgrades import WALL_BAR_PITCH, _wall_bar_shift
+    cfg = _cfg()
+
+    class Elsewhere:
+        def find(self, _name):
+            return (cfg.buttons["wall_more"][0] - WALL_BAR_PITCH - WALL_BAR_PITCH / 2, 0.15)
+
+    assert _wall_bar_shift(Elsewhere(), cfg) == 0.0
+
+
+def test_the_click_is_never_sent_over_the_blue_item_button(monkeypatch):
+    """The live bar has a blue 'upgrade with an item' button right of the elixir one, four pixels from where an
+    unshifted elixir click would land. Whatever the layout says, the spot is checked against the pixels."""
+    import cv2
+    from pathlib import Path
+    frame = cv2.imread(str(Path(__file__).parent / "fixtures" / "ui" / "wall_bar_six_buttons.png"))
+    cfg = _cfg()
+    cfg.buttons["wall_up_gold"] = (0.540, 0.809)
+    cfg.buttons["wall_up_elixir"] = (0.661, 0.809)      # the calibrated place: next to the blue button in this layout
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+
+    class OnTheBar(FakeScreen):
+        def grab(self):
+            shown = frame.copy()                       # the real bar, with a price that grows as walls are added and stops
+            since_more = self.click_names[len(self.click_names) - self.click_names[::-1].index("wall_more"):] if "wall_more" in self.click_names else []
+            adds = sum(1 for n in since_more if n == "wall_add1")     # walls added in the panel opened last
+            for x0, x1 in ((0.30, 0.50), (0.60, 0.80)):              # the gold and the elixir price
+                shown[int(0.70 * 729):int(0.75 * 729), int(x0 * 1296):int(x1 * 1296)] = (min(adds, 4) * 40) % 256
+            return shown
+
+    scr = OnTheBar(has_templates={"wall_panel": True, "walls_dialog": True}, find_templates={"confirm_upgrade": (0.5, 0.9)})
+    logs = []
+    upgrade_walls(scr, cfg, logs.append, lambda: None, _nop_sleep)
+    assert (0.661, 0.809) not in scr.clicks
+    assert any("boton de mejorar con objeto" in m for m in logs), logs
+    assert (0.540, 0.809) in scr.clicks                 # the gold button is clear of it and is pressed
+
+
+class ScheduleScreen(FakeScreen):
+    """The price region follows `schedule[adds]` (the last value repeats): a number each time it differs."""
+
+    def __init__(self, schedule, **kw):
+        super().__init__(**kw)
+        self.schedule = schedule
+
+    def grab(self):
+        import numpy as np
+        frame = np.zeros((729, 1296, 3), np.uint8)
+        adds = sum(1 for n in self.click_names if n == "wall_add1")
+        value = self.schedule[min(adds, len(self.schedule) - 1)]
+        frame[int(0.70 * 729):int(0.75 * 729), int(0.30 * 1296):int(0.50 * 1296)] = (value * 3) % 256
+        return frame
+
+
+def test_one_look_at_an_unchanged_price_is_not_the_cap(monkeypatch):
+    """A slow redraw can show the same price once; the walls added next must still be added."""
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    scr = ScheduleScreen([0, 1, 2, 2, 3, 4, 5, 5, 5, 5], has_templates={"wall_panel": True, "walls_dialog": True},
+                         find_templates={"confirm_upgrade": (0.5, 0.9)})
+    upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert scr.click_names.count("wall_add1") >= 8
+
+
+def test_a_price_that_never_moves_means_no_wall_could_be_added_and_nothing_is_pressed(monkeypatch):
+    """Not even one wall is affordable: the counter never moves, so there is no cap to accept: skip the resource."""
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    scr = ScheduleScreen([7], has_templates={"wall_panel": True, "walls_dialog": True},
+                         find_templates={"confirm_upgrade": (0.5, 0.9)})
+    logs = []
+    result = upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep)
+    assert result is False
+    assert "wall_up_gold" not in scr.click_names and "wall_up_elixir" not in scr.click_names
+    assert any("No se pudo anadir ningun muro" in m for m in logs)
