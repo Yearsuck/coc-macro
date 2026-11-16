@@ -12,7 +12,7 @@ again; restart after an error and carry on.
 
 ## What the recon found (evidence, 2026-11-15)
 
-Sources: 72 failure captures in `C:\Users\ernes\CoCMacro\data\debug` and `Downloads\data\debug`
+Sources: 72 failure captures in the `data\debug` folders of two installed copies of the app
 (24 newest copied to `tests/fixtures/raw/loot-yellow/`, git-ignored), and two live runs on the open window.
 
 1. **Loot OCR.** The gold number is now pale yellow (bright pixels B 194-208, G/R 241-255); elixir is
