@@ -160,7 +160,7 @@ Select what the bot does in the village between attacks:
 - **`Parar si los depositos estan llenos` (`stop_when_full`)**:
   Monitors the visual fill level of your gold and elixir storage bars at the top right of the village screen. If both storages are full, attacks pause until resources are spent. In `busy` mode the bot uses free builders to spend resources before resuming attacks. In `walls` mode the option only adds a wait when **everything** is full and the walls could not be upgraded: the mode already stops attacking to upgrade walls as soon as the gold or the elixir storage is full, and it no longer runs the wall routine before every attack.
 - **`Heroes primero (modo Mejorar lo mas barato)` (`prioritize_heroes`)**:
-  In `busy` mode, the bot checks the `Heroe` (Hero) filter on the builders tab first. If a hero upgrade is affordable, it upgrades the hero before falling back to general buildings.
+  Only shown in the `Mejorar lo mas barato` mode, the only one it affects. Under the `Entre ataques` selector a line says what the chosen mode does. In `busy` mode, the bot checks the `Heroe` (Hero) filter on the builders tab first. If a hero upgrade is affordable, it upgrades the hero before falling back to general buildings.
 - **`Solo simular (no pulsa nada)` (session only, not saved)**:
   Simulate-only mode. The bot captures the active screen, executes OCR on loot, damage, and clock readings, and logs whether it would attack or skip without sending any mouse clicks or keystrokes to the game.
 
@@ -191,9 +191,13 @@ Shows what the bot's vision system reads in real time:
 
 The scrollable log box records timestamped actions and status updates with color tags:
 
-- **Green (`ok`)**: Attack initiated (`Atacando`), hash verification passed (`Hash correcto`).
-- **Yellow (`warn`)**: Skipping village (`Siguiente`), waiting for screens (`Sigo esperando`), initiating surrender (`Rindiendose`).
-- **Red (`bad`)**: Errors, timeouts, or aborted tasks (`Error`, `No se pudo`, `Atencion`, `Tiempo agotado`).
+- **Green (`ok`)**: Attack initiated (`Atacando`), attack finished (`Ataque N completado`), upgrade started (`Mejora lanzada`), hash verification passed (`Hash correcto`).
+- **Yellow (`warn`)**: Skipping village (`Siguiente`), waiting for screens (`Sigo esperando`), initiating surrender (`Rindiendose`), pressing a game dialog (`Aviso de recarga`), full storage with no free builder (`Deposito lleno`), cancelling a search that does not advance.
+- **Red (`bad`)**: Errors, timeouts, recoveries (`Error`, `No se pudo`, `Atencion`, `Tiempo agotado`, `Intento recuperar`).
+
+### Window size and layout
+
+The window can be resized freely (minimum about 560 x 520). On a wide window the cards go in two columns; on a narrow one they stack in one, the four reading tiles go 2 x 2 and the buttons wrap. Between the cards and the log there is a divider you can drag: until you do, the cards show whole when the log can keep its size under them, and the log takes any spare height; once you drag it, your split stays. While the bot is running the state card also shows `Esperando un constructor libre` (walls mode waiting for a builder), `Mejorando` and `Recuperandose de un atasco`, and a `Recuperaciones` counter appears next to the attack counter once the bot had to recover.
 
 ---
 

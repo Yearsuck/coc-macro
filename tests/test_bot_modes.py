@@ -796,3 +796,13 @@ def test_walls_with_stop_when_full_retry_the_routine_after_a_pause_while_everyth
     bot = Bot(g, config.Config(mode="walls", stop_when_full=True), logs.append, stop, sleep=slept.append)
     bot.run()
     assert len(g.upgrades) >= 3 and sum(slept) >= bot_module.FAIL_WAIT_S
+
+
+def test_waiting_for_a_builder_is_announced_to_the_window():
+    phases = []
+    g = ModeGame(slots=[{"builders": 0}, {"builders": 1}],
+                 levels=[{"gold": True, "elixir": False}, {"gold": True, "elixir": False}, {"gold": False, "elixir": False}])
+    logs, stop = [], threading.Event()
+    bot = Bot(g, config.Config(mode="walls"), logs.append, stop, sleep=lambda s: None, on_phase=phases.append)
+    bot.spend_free_slots()
+    assert phases[:2] == ["wait_builder", "upgrade"]

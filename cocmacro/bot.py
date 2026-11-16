@@ -81,6 +81,7 @@ class Bot:
         self.read_tries, self.unreadable_limit = read_tries, unreadable_limit
         self.on_phase, self.on_reading, self._reading_state = on_phase, on_reading, {}
         self.attacks_done = 0
+        self.recoveries_done = 0     # recoveries started in this run (never reset: the window shows the total)
         self._last_stuck = None
 
     # -- helpers -------------------------------------------------------
@@ -532,6 +533,7 @@ class Bot:
         # counter that cannot be read is not "none free": after a few blind looks in a row go on attacking
         # instead of waiting for ever on a number the bot cannot see.
         if builders < 1:
+            self._phase("wait_builder")
             self.log("Deposito lleno y sin constructor libre: espero a que quede uno")
             blind = 0
             while builders < 1:
@@ -575,6 +577,7 @@ class Bot:
 
     def _recover(self, reason: str) -> None:
         """Try to get back to the village after a _Stuck. Never raises _Stuck itself."""
+        self._phase("recover")
         self.log(f"{reason}. Intento recuperar")
         self._dump("stuck")
         for _ in range(RECOVER_STEPS):
@@ -674,6 +677,7 @@ class Bot:
             if stuck is None or self.dry_run:        # stopped for good; a simulation never clicks its way out
                 break
             recoveries += 1
+            self.recoveries_done += 1
             try:
                 self._recover(str(stuck))
                 self._nap(min(RECOVER_PAUSE_S * recoveries, RECOVER_PAUSE_MAX_S))
