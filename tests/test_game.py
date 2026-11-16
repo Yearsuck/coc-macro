@@ -340,3 +340,151 @@ def test_reload_stopped_while_waiting_for_the_input_taps_nothing(tmp_path, monke
     monkeypatch.setattr(winctl, "exclusive_input", not_got)
     assert g.reload_if_disconnected() is True
     assert clicks == []
+
+
+def test_storage_levels_returns_three_keys_and_storages_full_unchanged(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.regions.update({"storage_gold": (0.8, 0.03, 0.95, 0.06), "storage_elixir": (0.8, 0.08, 0.95, 0.11),
+                          "storage_dark": (0.85, 0.14, 0.97, 0.18)})
+    # gold True, elixir False, dark None
+    monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: True if hue == (18, 40) else False)
+    monkeypatch.setattr(vision, "dark_storage_full", lambda frame, region: None)
+    levels = g.storage_levels()
+    assert set(levels.keys()) == {"gold", "elixir", "dark"}
+    assert levels == {"gold": True, "elixir": False, "dark": None}
+
+    # all full -> True
+    monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: True)
+    monkeypatch.setattr(vision, "dark_storage_full", lambda frame, region: True)
+    assert g.storages_full() is True
+
+    # one False -> False
+    monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: True if hue == (18, 40) else False)
+    monkeypatch.setattr(vision, "dark_storage_full", lambda frame, region: True)
+    assert g.storages_full() is False
+
+    # gold None + elixir True -> None
+    monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: None if hue == (18, 40) else True)
+    monkeypatch.setattr(vision, "dark_storage_full", lambda frame, region: True)
+    assert g.storages_full() is None
+
+    # no dark region -> gold/elixir decide
+    g.cfg.regions.pop("storage_dark", None)
+    monkeypatch.setattr(vision, "storage_full", lambda frame, region, hue=None: True)
+    levels_no_dark = g.storage_levels()
+    assert levels_no_dark["dark"] is None
+    assert g.storages_full() is True
+
+
+def test_reload_if_disconnected_unknown_native_dialog(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.debug_dir = tmp_path / "debug"
+    dumped = []
+    g.dump_debug = dumped.append
+    # inactivity dialog is False
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: False)
+    # native dialog returns a point while "up" (until clicked, then None)
+    def fake_native(frame):
+        return None if clicks else (0.4, 0.5)
+    monkeypatch.setattr(vision, "native_dialog", fake_native)
+
+    assert g.any_dialog() is True
+    assert g.reload_dialog() == (0.4, 0.5)
+    assert g.reload_if_disconnected() is True
+    assert clicks == [(0.4, 0.5)]
+    assert dumped == ["dialog"]
+
+
+def test_reload_if_disconnected_inactivity_dialog(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["reload_inactive"] = (0.355, 0.571)
+    dumped = []
+    g.dump_debug = dumped.append
+    # inactivity dialog is True first, then False after click
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: not clicks and name.startswith("reload_inactive"))
+    monkeypatch.setattr(vision, "native_dialog", lambda frame: None)
+
+    assert g.reload_if_disconnected() is True
+    assert clicks == [(0.355, 0.571)]
+    assert dumped == []   # no dump for inactivity dialog
+
+
+def test_reload_if_disconnected_no_dialog(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    dumped = []
+    g.dump_debug = dumped.append
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: False)
+    monkeypatch.setattr(vision, "native_dialog", lambda frame: None)
+
+    assert g.any_dialog() is False
+    assert g.reload_dialog() is None
+    assert g.reload_if_disconnected() is False
+    assert clicks == []
+    assert dumped == []
+
+
+def test_a_button_pressed_again_right_away_is_pressed_at_another_point(tmp_path, monkeypatch):
+    """Live 2026-11-15: 'Siguiente' pressed 4 times in a row at the same point was ignored every time, while a
+    press at another point (Terminar batalla) was taken at once. A repeated press must not land on the same
+    pixel; a first press, or one after a pause, uses the calibrated point."""
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.cfg.buttons["next"], g.cfg.buttons["back"] = (0.91, 0.755), (0.5, 0.86)
+    now = [100.0]
+    monkeypatch.setattr(game.time, "monotonic", lambda: now[0])
+    for _ in range(3):
+        g.click_button("next")
+        now[0] += 1.0
+    assert clicks[0] == pytest.approx((0.91, 0.755))
+    assert len(set(clicks)) == 3                                         # three different points
+    assert all(abs(x - 0.91) <= 0.012 and abs(y - 0.755) <= 0.01 for x, y in clicks)   # all inside the button
+    clicks.clear()
+    g.click_button("back")
+    assert clicks[-1] == pytest.approx((0.5, 0.86))                      # another button: its own point
+    now[0] += game.REPEAT_PRESS_S + 1
+    g.click_button("back")
+    assert clicks[-1] == pytest.approx((0.5, 0.86))                      # after a pause: the calibrated point again
+
+
+def test_an_unknown_dialog_seen_in_one_look_only_is_not_pressed(tmp_path, monkeypatch):
+    """Review finding: the dialog is found by shape alone, so a screen that matches for one frame must not
+    get the game tapped. It has to be there twice, a moment apart."""
+    from cocmacro import vision
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    g.dump_debug = lambda reason: None
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: False)
+    monkeypatch.setattr(game.time, "sleep", lambda s: None)
+    looks = []
+    monkeypatch.setattr(vision, "native_dialog", lambda frame: (0.4, 0.5) if not looks.append(1) and len(looks) == 1 else None)
+    assert g.reload_if_disconnected() is False
+    assert clicks == [] and len(looks) == 2
+
+
+def test_a_failed_debug_capture_does_not_leave_the_dialog_unpressed(tmp_path, monkeypatch):
+    from cocmacro import vision
+    g, clicks = make(tmp_path, monkeypatch, "f004.png")
+    monkeypatch.setattr(templates, "match", lambda frame, name, tpl_dir, threshold=None: False)
+    monkeypatch.setattr(game.time, "sleep", lambda s: None)
+    monkeypatch.setattr(vision, "native_dialog", lambda frame: None if clicks else (0.4, 0.5))
+
+    def full_disk(reason):
+        raise OSError("disk full")
+    g.dump_debug = full_disk
+    assert g.reload_if_disconnected() is True
+    assert clicks == [(0.4, 0.5)]
+
+
+def test_cancel_search_presses_volver_only_on_the_search_screen(tmp_path, monkeypatch):
+    from cocmacro import defaults
+    frames_by_name = {n: cv2.imread(str(FIX / "ui" / f"{n}.png")) for n in ("search_failed", "village_no_menu")}
+    clicks, shown = [], ["search_failed"]
+    monkeypatch.setattr(winctl, "click", lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(game.frames, "grab", lambda win: frames_by_name[shown[0]])
+    g = game.RealGame(None, config.Config(), None, threading.Event(), defaults.DIR)
+    assert g.cancel_search() is True and clicks == [pytest.approx((0.055, 0.905), abs=0.005)]
+    clicks.clear()
+    shown[0] = "village_no_menu"
+    assert g.cancel_search() is False and clicks == []

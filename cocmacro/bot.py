@@ -10,7 +10,7 @@ from cocmacro.winctl import WindowMinimized, WindowNotFound
 POLL = 0.5
 REPORT_EVERY = 20   # polls (10 s) between 'still waiting' messages
 READ_GAP = 0.4
-MAX_READ_TRIES = 10
+MAX_READ_TRIES = 4
 BLIND_POLLS = 40         # battle polls (20 s) with no damage reading before a debug capture is kept
 SEARCH_TRIES = 3          # presses of Batalla / Buscar / Atacar before giving up
 SEARCH_RETRY_S = 12       # seconds to see the scout screen before pressing them again
@@ -29,6 +29,15 @@ TIME_RULE_GRACE_POLLS = 20  # the clock rule only counts after this many battle 
                             # poll) since the deployment ended; turns of the other account shift the clock
 BACK_EVERY_S = 4          # while on the results screen, press Volver again this often
 RELOAD_SETTLE_S = 2      # extra seconds once the village is back
+NEXT_GONE_S = 3           # seconds to wait for "Siguiente" to disappear after pressing it
+NEXT_TRIES = 3            # presses of "Siguiente" before giving up
+DIALOG_EVERY_S = 5        # seconds between dialog checks inside _wait and the battle loop
+BUILDER_BLIND_LIMIT = 6   # looks in a row at an unreadable builder counter before walls mode stops waiting
+SELF_START_LIMIT = 5      # max battles started by themselves (scout countdown) in one _cycle
+RECOVER_STEPS = 20        # rounds of recovery before giving up
+RECOVER_IDLE_S = 5        # seconds to wait on an unrecognised screen during recovery
+RECOVER_PAUSE_S = 30      # base pause between recovery attempts
+RECOVER_PAUSE_MAX_S = 300 # maximum pause between recovery attempts
 
 
 class Game(Protocol):
@@ -46,7 +55,15 @@ class _Abort(Exception):
     pass
 
 
+class _Stuck(Exception):
+    pass
+
+
 class _Unreadable(Exception):
+    pass
+
+
+class _BailOut(Exception):
     pass
 
 
@@ -64,6 +81,7 @@ class Bot:
         self.read_tries, self.unreadable_limit = read_tries, unreadable_limit
         self.on_phase, self.on_reading, self._reading_state = on_phase, on_reading, {}
         self.attacks_done = 0
+        self._last_stuck = None
 
     # -- helpers -------------------------------------------------------
     def _phase(self, name: str) -> None:
@@ -105,7 +123,7 @@ class Bot:
         return False
 
     def _reload_if_disconnected(self) -> bool:
-        """Inactivity dialog: press 'VOLVER A CARGAR' and wait for the village to return. True if pressed."""
+        """Reload dialog (inactivity or native): press and wait for the village to return. True if pressed."""
         if self.dry_run:
             return False
         fn = getattr(self.game, "reload_if_disconnected", None)
@@ -120,10 +138,10 @@ class Bot:
             return False
         if not pressed:
             return False
-        self.log("Sesion desconectada por inactividad: recargo")
+        self.log("Aviso de recarga: pulso y espero la aldea")
         # The village is visible behind the dialog, so "home" alone proves nothing: first the dialog must go.
         # If it stays the press was not taken: press again.
-        still_up = getattr(self.game, "inactivity_dialog", None)
+        still_up = getattr(self.game, "any_dialog", None) or getattr(self.game, "inactivity_dialog", None)
         if still_up:
             for attempt in range(RELOAD_TRIES):
                 for _ in range(max(1, int(RELOAD_PRESS_WAIT_S / POLL))):
@@ -133,7 +151,7 @@ class Bot:
                     self.sleep(POLL)
                 else:
                     if attempt + 1 >= RELOAD_TRIES:
-                        raise _Abort("La sesion no se recargo: el aviso sigue ahi")
+                        raise _Stuck("La sesion no se recargo: el aviso sigue ahi")
                     self.log("El aviso sigue: pulso otra vez")
                     fn()
                     continue
@@ -144,28 +162,39 @@ class Bot:
                 break
             self.sleep(POLL)
         else:
-            raise _Abort("La aldea no cargo tras recargar")
+            raise _Stuck("La aldea no cargo tras recargar")
         self._nap(RELOAD_SETTLE_S)
         return True
 
     def _wait(self, pred: Callable[[], bool], what: str, screen: str | None = None,
-              popups: bool = False, results: bool = False) -> None:
+              popups: bool = False, results: bool = False,
+              bail: Callable[[], bool] | None = None) -> None:
         """Wait for `pred`. `popups` also closes a 'Vale' notice; `results` also presses Volver again every
         BACK_EVERY_S while the results screen is up (the caller pressed it once already, or the first press was
-        lost, and the bot would wait for the village forever). Never at the first look: that would double-press."""
+        lost, and the bot would wait for the village forever). Never at the first look: that would double-press.
+        `bail` is looked at each poll: true on two polls in a row raises `_BailOut` so the caller can start
+        over (one look is not enough: a transition between screens can show the same thing for a moment)."""
+        bail_hits = 0
+        dialog_polls = max(1, int(DIALOG_EVERY_S / POLL))
         for i in range(max(1, int(self.timeout_s / POLL))):
             self._check()
             if pred():
                 return
+            bail_hits = bail_hits + 1 if bail and bail() else 0
+            if bail_hits >= 2:
+                raise _BailOut()
             if popups:
                 self._dismiss_popup()
             if results and i and i % max(1, int(BACK_EVERY_S / POLL)) == 0 and self.game.screen_is("results"):
                 self.log("Estoy en la pantalla de resultados: pulso Volver")
                 self._click("back")
+            if not self.dry_run and i and i % dialog_polls == 0:
+                if self._reload_if_disconnected():
+                    raise _Stuck("El juego se recargo en mitad de un paso")
             if i and i % REPORT_EVERY == 0:
                 self.log(f"Sigo esperando: {what} ({i * POLL:.0f}s){self._why(screen)}")
             self.sleep(POLL)
-        raise _Abort(f"Tiempo agotado esperando: {what}")
+        raise _Stuck(f"Tiempo agotado esperando: {what}")
 
     def _click(self, name: str) -> None:
         self._check()
@@ -206,6 +235,20 @@ class Bot:
             self.log("Cierro un menu o ventana que quedo abierto")
             self._nap(self.step_delay)
 
+    def _next_village(self) -> None:
+        """Press 'Siguiente' and verify the button went away (F1). If the press had no effect, press again
+        (up to NEXT_TRIES times). Raises _Stuck after NEXT_TRIES presses with no effect."""
+        for attempt in range(NEXT_TRIES):
+            self._click("next")
+            for _ in range(max(1, int(NEXT_GONE_S / POLL))):
+                self._check()
+                if not self.game.screen_is("scout"):
+                    return
+                self.sleep(POLL)
+            if attempt + 1 < NEXT_TRIES:
+                self.log("Siguiente no hizo efecto: pulso otra vez")
+        raise _Stuck(f"Siguiente no hizo efecto tras {NEXT_TRIES} intentos")
+
     def _open_search(self) -> None:
         """Batalla -> Buscar -> Atacar. A notice (star bonus after a win) can appear late and swallow these
         clicks, leaving the village on screen: if after a few seconds it is still the village, press them again
@@ -231,7 +274,7 @@ class Bot:
                 return                        # loading: let the normal wait for the scout screen handle it
             if attempt + 1 < SEARCH_TRIES:
                 self.log("La busqueda no arranco (aviso encima?): repito Batalla, Buscar, Atacar")
-        raise _Abort(f"La busqueda no arranco tras {SEARCH_TRIES} intentos: sigo en el pueblo")
+        raise _Stuck(f"La busqueda no arranco tras {SEARCH_TRIES} intentos: sigo en el pueblo")
 
     def _cycle(self) -> None:
         self._check()
@@ -251,10 +294,24 @@ class Bot:
             self._click("back")
         self._wait(lambda: self.game.screen_is("home"), "pantalla de inicio", "home", popups=True, results=True)
         self._phase("search")
+        self_starts = 0
         self._open_search()
         unreadable = 0
         while True:
-            self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga", "scout")
+            # Wait for the scout screen, but bail if a battle started by itself (F2)
+            try:
+                self._wait(lambda: self.game.screen_is("scout"), "aldea enemiga", "scout",
+                           bail=lambda: self.game.screen_is("battle"))
+            except _BailOut:
+                self_starts += 1
+                if self_starts > SELF_START_LIMIT:
+                    raise _Stuck(f"La batalla empezo sola {self_starts} veces en una misma busqueda")
+                self.log("La cuenta atras termino y la batalla empezo sola: la termino y busco otra")
+                self._click("end")
+                self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home",
+                           popups=True, results=True)
+                self._open_search()
+                continue
             self._phase("evaluate")
             self._reading(gold=None, elixir=None, verdict=None, damage=None, time_left=None)
             try:
@@ -263,11 +320,10 @@ class Bot:
                 unreadable += 1
                 self._dump("loot")
                 if unreadable >= self.unreadable_limit:
-                    raise _Abort(f"No se pudo leer oro y elixir en {unreadable} aldeas seguidas: parado. "
+                    raise _Stuck(f"No se pudo leer oro y elixir en {unreadable} aldeas seguidas. "
                                  "Mira las capturas de la carpeta data/debug o recalibra")
                 self.log(f"No se pudo leer el botin: salto esta aldea ({unreadable} seguidas)")
-                self._click("next")
-                self.sleep(self.step_delay)
+                self._next_village()
                 continue
             unreadable = 0
             self._reading(gold=gold, elixir=elixir,
@@ -276,15 +332,15 @@ class Bot:
                 self.log(f"Atacando: oro {gold}, elixir {elixir}")
                 break
             self.log(f"Siguiente: oro {gold}, elixir {elixir}")
-            self._click("next")
-            self.sleep(self.step_delay)
+            self._next_village()
         self._check()
         self._phase("deploy")
         if not self.game.play_deployment():
             raise _Abort("Despliegue interrumpido")
         blind, since_deploy = 0, 0
         grace_polls = TIME_RULE_GRACE_POLLS
-        for _ in range(max(1, int(self.battle_timeout_s / POLL))):
+        dialog_polls = max(1, int(DIALOG_EVERY_S / POLL))
+        for poll_i in range(max(1, int(self.battle_timeout_s / POLL))):
             self._check()
             if self.game.screen_is("results"):
                 self.log("La batalla termino sola")
@@ -315,9 +371,12 @@ class Bot:
                 self._phase("back")
                 self._click("back")
                 break
+            if not self.dry_run and poll_i and poll_i % dialog_polls == 0:
+                if self._reload_if_disconnected():
+                    raise _Stuck("El juego se recargo en mitad de un paso")
             self.sleep(POLL)
         else:
-            raise _Abort("Tiempo agotado esperando el final de la batalla")
+            raise _Stuck("Tiempo agotado esperando el final de la batalla")
         self._wait(lambda: self.game.screen_is("home"), "volver a la aldea", "home", popups=True, results=True)
 
     def _surrender(self) -> bool:
@@ -336,7 +395,7 @@ class Bot:
                 self.sleep(POLL)
             if attempt + 1 < SURRENDER_TRIES:
                 self.log("La rendicion no se confirmo: pulso Rendirse otra vez")
-        raise _Abort("Tiempo agotado esperando: confirmar rendicion")
+        raise _Stuck("Tiempo agotado esperando: confirmar rendicion")
 
     # -- modes: storages full / spend free builders ---------------------
     def _nap(self, seconds: float) -> None:
@@ -372,6 +431,42 @@ class Bot:
             return False
         return full >= 2
 
+    def _any_storage_full(self) -> bool:
+        """True when gold OR elixir is full (dark is ignored). Same robustness as _storages_full:
+        STORAGE_SETTLE sleep first, up to 4 readings STORAGE_READ_GAP apart, a resource counts as
+        full once it was read True twice; stop early as soon as one resource reached two True readings,
+        or both gold and elixir reached two False readings."""
+        fn = getattr(self.game, "storage_levels", None)
+        if not fn:
+            return False
+        self.sleep(STORAGE_SETTLE)
+        gold_full = gold_not = 0
+        elixir_full = elixir_not = 0
+        try:
+            for i in range(4):
+                if i:
+                    self.sleep(STORAGE_READ_GAP)
+                levels = fn()
+                g, e = levels.get("gold"), levels.get("elixir")
+                if g is True:
+                    gold_full += 1
+                elif g is False:
+                    gold_not += 1
+                if e is True:
+                    elixir_full += 1
+                elif e is False:
+                    elixir_not += 1
+                if gold_full >= 2 or elixir_full >= 2:
+                    return True
+                if gold_not >= 2 and elixir_not >= 2:
+                    return False
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"No pude leer los depositos: {e}")
+            return False
+        return gold_full >= 2 or elixir_full >= 2
+
     def _slot_free(self) -> bool:
         if self.cfg.mode == "busy":
             return True      # the pet counter is only readable inside the Construir menu: always look there
@@ -397,23 +492,28 @@ class Bot:
             self.log("No se pudo mejorar nada")
         return ok
 
-    def _free_builders(self) -> int:
+    def _builders_reading(self) -> int | None:
+        """Free builders shown by the village counter; None when it cannot be read."""
         fn = getattr(self.game, "free_slots", None)
         if not fn:
             return 0
         try:
-            return int(fn().get("builders") or 0)
+            value = fn().get("builders")
+            return None if value is None else int(value)
         except (_Abort, WindowNotFound, WindowMinimized):
             raise
         except Exception as e:
             self.log(f"No pude leer los constructores: {e}")
-            return 0
+            return None
+
+    def _free_builders(self) -> int:
+        return self._builders_reading() or 0
 
     def spend_free_slots(self) -> None:
         """Before every attack (the first one too). Busy mode: use every free builder / researcher / pet, so the
         counters are at 0, unless the price cannot be paid (the routine drains every tab by itself). Walls mode:
-        keep exactly one builder free (the surplus goes to the cheapest permanent upgrades) and run the walls
-        while that builder is free."""
+        keep exactly one builder free (the surplus goes to the cheapest permanent upgrades); then, if a storage
+        is full, run the wall routine; if no storage is full, skip the walls and attack."""
         if self.dry_run or self.cfg.mode == "none":
             return
         if self.cfg.mode == "busy":
@@ -425,14 +525,39 @@ class Bot:
             # HUD is still settling and the counter can read blurry: wait, look again, and trust the reserve.
             self.sleep(STORAGE_SETTLE)
             builders = max(self._free_builders(), 1)
+        # Without full storages, save the builder for walls and proceed to attack
+        if not self._any_storage_full():
+            return
+        # A storage is full but no builder is free: attacking would only waste loot, so wait for one. A
+        # counter that cannot be read is not "none free": after a few blind looks in a row go on attacking
+        # instead of waiting for ever on a number the bot cannot see.
+        if builders < 1:
+            self.log("Deposito lleno y sin constructor libre: espero a que quede uno")
+            blind = 0
+            while builders < 1:
+                self._reload_if_disconnected()
+                self._nap(FULL_POLL_S)
+                reading = self._builders_reading()
+                blind = blind + 1 if reading is None else 0
+                if blind >= BUILDER_BLIND_LIMIT:
+                    self.log("No consigo leer los constructores: sigo atacando")
+                    return
+                builders = reading or 0
+        # Upgrade walls while storages are full and a builder remains free
         for _ in range(MAX_SPEND_ROUNDS):
-            if builders < 1 or not self._spend():
+            if not self._spend("walls"):
+                return
+            if not self._any_storage_full():
                 return
             builders = self._free_builders()
+            if builders < 1:
+                return
 
     def wait_if_full(self) -> None:
         """No attacks while gold and elixir are full; in a mode, spend a free slot meanwhile."""
         if self.dry_run or not (self.cfg.stop_when_full or self.cfg.mode != "none"):
+            return
+        if self.cfg.mode == "walls" and not self.cfg.stop_when_full:
             return
         self._reload_if_disconnected()
         announced = False
@@ -448,22 +573,80 @@ class Bot:
                 continue
             self._nap(FULL_POLL_S)
 
-    def run_once(self) -> bool:
-        try:
-            self._cycle()
-        except _Abort as e:
-            self.log(str(e))
-            return False
-        except (WindowNotFound, WindowMinimized) as e:
-            self.log(str(e))
-            return False
+    def _recover(self, reason: str) -> None:
+        """Try to get back to the village after a _Stuck. Never raises _Stuck itself."""
+        self.log(f"{reason}. Intento recuperar")
+        self._dump("stuck")
+        for _ in range(RECOVER_STEPS):
+            try:
+                self._check()
+                if self._reload_if_disconnected():
+                    continue
+                # home is checked before any click so that nothing is pressed on the village
+                if self.game.screen_is("home"):
+                    self._close_leftover_menu()
+                    return
+                if self._dismiss_popup():
+                    self._nap(self.step_delay)
+                    continue
+                fn = getattr(self.game, "close_menu", None)
+                if fn and fn():
+                    self.log("Cierro un menu o ventana que quedo abierto")
+                    self._nap(self.step_delay)
+                    continue
+                if self.game.screen_is("results"):
+                    self._click("back")
+                    self._nap(self.step_delay)
+                    continue
+                if self.game.screen_is("confirm"):
+                    self._click("ok")
+                    self._nap(self.step_delay)
+                    continue
+                if self.game.screen_is("scout") or self.game.screen_is("battle"):
+                    self._click("end")
+                    self._nap(self.step_delay)
+                    continue
+                cancel = getattr(self.game, "cancel_search", None)
+                if cancel and cancel():
+                    self.log("Cancelo una busqueda que no avanza")
+                    self._nap(self.step_delay)
+                    continue
+                self._nap(RECOVER_IDLE_S)
+            except _Stuck as e:
+                self.log(f"Durante la recuperacion: {e}")
+
+    def _run_inner(self) -> None:
+        """One attack cycle. Lets _Stuck through (for run() to handle); catches _Abort and window exceptions
+        only for the public run_once wrapper."""
+        self._cycle()
         if not self.dry_run:
             self.attacks_done += 1
             self.log(f"Ataque {self.attacks_done} completado")
-        return True
+
+    def run_once(self) -> bool:
+        self._last_stuck = None
+        try:
+            self._run_inner()
+            return True
+        except _Stuck as e:
+            self._last_stuck = e
+            self.log(str(e))
+            return False
+        except (_Abort, WindowNotFound, WindowMinimized) as e:
+            self.log(str(e))
+            return False
+        except Exception as e:           # an unexpected error is one more way of being stuck, not the end
+            self._last_stuck = _Stuck(f"Error inesperado: {e!r}")
+            self.log(str(self._last_stuck))
+            return False
 
     def run(self) -> None:
+        """Attack until stopped. Only F8 / Stop or a lost window end the run: a step that got stuck is
+        recovered from (back to the village) and the loop goes on, pausing longer after each recovery in a row
+        so a broken screen is not hammered."""
+        recoveries = 0
         while not self.stop.is_set():
+            stuck: _Stuck | None = None
             try:
                 self._reload_if_disconnected()
                 if not self.dry_run:
@@ -472,8 +655,28 @@ class Bot:
                 if not self.dry_run:
                     self._close_leftover_menu()      # a menu left open would hide the storage bars
                 self.wait_if_full()                  # then, if the storages are still full, wait for room
+            except _Stuck as e:
+                self.log(str(e))
+                stuck = e
             except (_Abort, WindowNotFound, WindowMinimized) as e:
                 self.log(str(e))
                 break
-            if not self.run_once():
+            except Exception as e:
+                stuck = _Stuck(f"Error inesperado: {e!r}")
+                self.log(str(stuck))
+            if stuck is None:
+                if self.stop.is_set():
+                    break
+                if self.run_once():
+                    recoveries = 0
+                    continue
+                stuck = self._last_stuck
+            if stuck is None or self.dry_run:        # stopped for good; a simulation never clicks its way out
+                break
+            recoveries += 1
+            try:
+                self._recover(str(stuck))
+                self._nap(min(RECOVER_PAUSE_S * recoveries, RECOVER_PAUSE_MAX_S))
+            except (_Abort, WindowNotFound, WindowMinimized) as e:
+                self.log(str(e))
                 break

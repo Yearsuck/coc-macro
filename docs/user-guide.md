@@ -152,13 +152,13 @@ Select what the bot does in the village between attacks:
 | Mode Label | Setting | Description |
 | :--- | :--- | :--- |
 | `Solo atacar` | `none` | Continuous attack loop. Attacks, returns to village, and immediately searches for the next target. |
-| `Mejorar muros` | `walls` | Wall upgrade mode. Checks for free builders before each attack. If more than 1 builder is free, it allocates surplus builders to the cheapest permanent upgrades, keeping exactly 1 builder reserved for walls. It then selects the wall block, opens the multi-wall panel, clicks `Añadir muro (+1)` until costs turn red, backs off 1 or 2 walls, and confirms the upgrade (`Mejorar muros`) for gold and elixir. |
+| `Mejorar muros` | `walls` | Wall upgrade mode. Attacks back to back until the gold **or** the elixir storage is full, then upgrades walls and goes back to attacking. Before each attack, if more than 1 builder is free, the surplus builders go to the cheapest permanent upgrades, keeping exactly 1 builder reserved for walls. When a storage is full and no builder is free, the bot waits, checking every few seconds, until one is. For the upgrade it selects the wall block, opens the multi-wall panel, clicks `Añadir muro (+1)` until costs turn red, backs off 1 or 2 walls, and confirms the upgrade (`Mejorar muros`) for gold and elixir. |
 | `Mejorar lo mas barato` | `busy` | Upgrades cheapest items. Checks free builders, laboratory researchers, and pet house slots. Opens the `Construir` (Build) menu, applies filters (`Permanente` + `Coste mín.`), and continuously starts the lowest-cost available upgrades until slots reach 0 or resources are depleted. Excludes siege machines listed under heroes (`skip_arrojatroncos`, `skip_destructor`, `skip_tiradora`). Never spends gems. |
 
 ### Additional Rule Options
 
 - **`Parar si los depositos estan llenos` (`stop_when_full`)**:
-  Monitors the visual fill level of your gold and elixir storage bars at the top right of the village screen. If both storages are full, attacks pause until resources are spent. In `walls` or `busy` mode, the bot uses free builders to spend resources before resuming attacks.
+  Monitors the visual fill level of your gold and elixir storage bars at the top right of the village screen. If both storages are full, attacks pause until resources are spent. In `busy` mode the bot uses free builders to spend resources before resuming attacks. In `walls` mode the option only adds a wait when **everything** is full and the walls could not be upgraded: the mode already stops attacking to upgrade walls as soon as the gold or the elixir storage is full, and it no longer runs the wall routine before every attack.
 - **`Heroes primero (modo Mejorar lo mas barato)` (`prioritize_heroes`)**:
   In `busy` mode, the bot checks the `Heroe` (Hero) filter on the builders tab first. If a hero upgrade is affordable, it upgrades the hero before falling back to general buildings.
 - **`Solo simular (no pulsa nada)` (session only, not saved)**:
@@ -224,13 +224,16 @@ Global hotkeys operate system-wide even when CoC Macro or Google Play Games is i
 ### OCR Misreading Loot Digits
 
 - **Symptoms**: The bot skips desirable villages or misreads digits; log shows `No se pudo leer oro y elixir de forma fiable`.
-- **Safety Limit**: If the bot encounters 5 consecutive unreadable villages (`unreadable_limit = 5`), it automatically stops to prevent wasting gold on skips.
+- **Safety Limit**: If the bot encounters 5 consecutive unreadable villages (`unreadable_limit = 5`), it leaves the search, goes back to the village and starts over (see *Getting unstuck* below).
+- **`Siguiente` not taken**: after pressing `Siguiente` the bot checks that the button went away; if not, it presses again at a slightly different point (3 presses at most).
+- **Countdown ran out**: if the 30 s scout countdown ends and the battle starts by itself, the bot presses `Terminar batalla` (nothing was deployed) and searches again.
 - **Debug Captures**: When an OCR error occurs, debug screenshots are saved to `data/debug/<account_index>/`. Inspect these images to verify if a village scenery skin or graphic effect obstructed the numbers.
 - **Solution**: Recalibrate the `gold` and `elixir` regions using `Calibrar botones y zonas`. Ensure your rectangle covers only the white number text without including the coin/droplet icons.
 
 ### Inactivity Disconnections & Popups
 
-- **Automatic Recovery**: If Clash of Clans disconnects due to inactivity, the bot detects the dialog, clicks `VOLVER A CARGAR` (Reload), and waits up to 5 minutes for the village to reload.
+- **Automatic Recovery**: If Clash of Clans shows a system dialog (disconnected due to inactivity, a server or connection error), the bot presses its button (`VOLVER A CARGAR` or whatever it says) and waits up to 5 minutes for the village to reload. It does so every time, with no limit, also in the middle of a search or a battle. A dialog that is not the inactivity one is saved to `data/debug` first. Note: this includes the "another device is connecting" dialog, so the bot will take the session back from your phone while it runs.
+- **Getting unstuck**: a step that times out no longer ends the run. The bot saves a capture (`*_stuck_*` in `data/debug`), closes whatever is open (a notice, a menu, the results, a battle, a search that does not advance such as `No se ha podido atacar esta aldea`), goes back to the village and continues; it pauses 30 s after a recovery, longer after each one in a row (up to 5 minutes). Only `Parar (F8)` or closing the game window stops it.
 - **Popup Handling**: Post-battle star bonus notices (`Vale`) or unexpected notices are automatically closed before starting search clicks.
 - **No-Gem Guarantee**: If a builder is unavailable during an upgrade, the game prompts to finish existing tasks with gems. The bot automatically clicks the close button (`X`) and logs: `No hay constructores libres: cierro el aviso sin gastar gemas`. The bot never spends gems.
 

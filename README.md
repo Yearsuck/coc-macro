@@ -12,10 +12,10 @@ Windows desktop automation app for Clash of Clans running in **Google Play Games
 - **Smart Surrender**: Surrenders when battle destruction reaches a target damage percentage or when the countdown clock drops below a set cutoff.
 - **Between-Attack Upgrade Modes**:
   - `Solo atacar` (Attack only): Pure farming loop without village maintenance.
-  - `Mejorar muros` (Upgrade walls): Automatically upgrades walls between attacks while reserving a builder.
+  - `Mejorar muros` (Upgrade walls): Attacks until the gold or elixir storage is full, then upgrades walls with both, reserving a builder for them.
   - `Mejorar lo mas barato` (Upgrade cheapest): Automatically starts the cheapest building, research, or pet upgrade whenever slots are free, with an optional `Heroes primero` (Heroes first) priority filter.
 - **Storage Protection**: Optionally pauses attacks when gold and elixir storages are completely full (`Parar si los depositos estan llenos`).
-- **Resilience**: Recovers from inactivity timeouts (`VOLVER A CARGAR` / Reload) and dismisses star bonus or gem dialog popups.
+- **Resilience**: Presses system dialogs (inactivity, server errors: `VOLVER A CARGAR` / Reload), dismisses star bonus or gem dialog popups, and gets back to the village and carries on after a step times out.
 - **Background Execution**: Works with the game window behind other applications without requiring window focus.
 - **In-App Updater**: Checks the project's GitHub Releases page for new versions, verifies SHA-256 hashes, and safely updates the executable.
 - **Global Hotkeys**: `F8` stops all running accounts immediately; `F9` ends an active deployment recording.

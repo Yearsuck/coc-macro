@@ -3,7 +3,7 @@ import threading
 import pytest
 
 from cocmacro import config
-from cocmacro.bot import Bot, RELOAD_WAIT_S, _Abort
+from cocmacro.bot import Bot, RELOAD_WAIT_S, _Abort, _Stuck
 from cocmacro.winctl import WindowNotFound
 
 LOW = (100_000, 100_000)
@@ -11,27 +11,42 @@ GOOD = (600_000, 700_000)
 
 
 class FakeGame:
-    def __init__(self, reads, damages=(), results_early=False, never_scout=False, boom=False, times=(), popup=False):
+    def __init__(self, reads, damages=(), results_early=False, never_scout=False, boom=False, times=(), popup=False,
+                 next_stuck=0):
         self.reads, self.damages, self.times = list(reads), list(damages), list(times)
         self.results_early, self.never_scout, self.boom = results_early, never_scout, boom
         self.screen, self.clicks, self.deployed, self.dumped = "home", [], 0, []
         self.popup, self.dismissed = popup, 0
+        self.next_stuck = next_stuck           # first N presses of "next" have no effect
+        self._next_presses = 0
+        self._clouds = False                   # True after a working "next" press; clears on next screen_is call
 
     def screen_is(self, name):
         if self.boom:
             raise WindowNotFound("Ventana de Clash of Clans no encontrada")
-        return self.screen == name
+        res = (self.screen == name)
+        if self._clouds:
+            self._clouds = False
+            self.screen = "scout"
+        return res
 
     def click_button(self, name):
         self.clicks.append(name)
         if name == "attack":
             self.screen = "menu" if self.never_scout else "scout"
+        elif name == "next":
+            self._next_presses += 1
+            if self._next_presses > self.next_stuck:
+                self._clouds = True
+                self.screen = "clouds"
         elif name == "surrender":
             self.screen = "confirm"
         elif name == "ok":
             self.screen = "results"
         elif name == "back":
             self.screen = "bonus" if self.popup else "home"
+        elif name == "end":
+            self.screen = "home"
 
     def dismiss_popup(self):
         if self.screen != "bonus":
@@ -273,7 +288,7 @@ def test_reload_if_disconnected_reloads_and_waits_for_home():
     assert bot._reload_if_disconnected() is True
     assert g.reload_calls == 1
     assert g.clicks == ["reload_inactive"]
-    assert any("recargo" in m.lower() for m in logs)
+    assert any("recarga" in m.lower() for m in logs)
 
 
 def test_reload_if_disconnected_false_when_not_disconnected_or_method_missing():
@@ -324,7 +339,7 @@ def test_reload_presses_again_when_the_dialog_stays_and_gives_up_after_the_tries
     from cocmacro.bot import RELOAD_TRIES
     g = DialogReloadGame(10 ** 6, reloads=[True] * 10, home_after=0)
     bot, logs, _ = make(g)
-    with pytest.raises(_Abort, match="aviso sigue"):
+    with pytest.raises(_Stuck, match="aviso sigue"):
         bot._reload_if_disconnected()
     assert g.reload_calls == RELOAD_TRIES                       # the first press plus the retries
     assert sum("pulso otra vez" in m for m in logs) == RELOAD_TRIES - 1
@@ -336,10 +351,10 @@ def test_reload_if_disconnected_never_home_aborts():
     bot, logs, _ = make(g)
     bot.sleep = slept.append
 
-    with pytest.raises(_Abort, match="La aldea no cargo tras recargar"):
+    with pytest.raises(_Stuck, match="La aldea no cargo tras recargar"):
         bot._reload_if_disconnected()
     assert sum(slept) >= RELOAD_WAIT_S
-    assert any("recargo" in m.lower() for m in logs)
+    assert any("recarga" in m.lower() for m in logs)
 
 
 def test_wait_if_full_reloads_at_start_and_each_iteration():
@@ -380,7 +395,7 @@ def test_run_reloads_at_top_of_iteration():
     assert calls[:2] == ["reloaded", "close_menu"]
     assert g.reload_calls >= 1
     assert "reload_inactive" in g.clicks
-    assert any("recargo" in m.lower() for m in logs)
+    assert any("recarga" in m.lower() for m in logs)
 
 
 def test_open_search_reloads_on_retry_and_retries_clicks():
@@ -559,3 +574,469 @@ def test_volver_is_pressed_again_if_the_first_press_is_lost():
     bot, _, _ = make(g, timeout_s=60)
     bot._wait(lambda: g.screen_is("home"), "pantalla de inicio", "home", popups=True, results=True)
     assert g.backs == 3
+
+
+# --- Part 2 and Part 3 Must-Pass Tests ---
+
+def test_next_press_does_nothing_once_retried():
+    # A 'next' press that does nothing once -> pressed again, cycle goes on and attacks good village;
+    # g.clicks.count("next") == 2 for one skipped village.
+    g = FakeGame([LOW, LOW, GOOD, GOOD], damages=[60], next_stuck=1)
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert g.clicks.count("next") == 2
+    assert g.deployed == 1
+    assert any("Siguiente no hizo efecto: pulso otra vez" in m for m in logs)
+
+
+def test_next_press_three_times_stuck():
+    # Three 'next' presses with no effect -> _Stuck (through run_once(): returns False, message logged).
+    g = FakeGame([LOW, LOW, GOOD, GOOD], damages=[60], next_stuck=3)
+    bot, logs, _ = make(g)
+    assert bot.run_once() is False
+    assert g.clicks.count("next") == 3
+    assert any("no hizo efecto tras 3 intentos" in m for m in logs)
+
+
+def test_unreadable_loot_gives_up_after_max_read_tries():
+    # Unreadable loot gives up after MAX_READ_TRIES (4) attempts: count read_resources calls.
+    from cocmacro.bot import MAX_READ_TRIES, _Unreadable
+    read_calls = 0
+
+    class CountingGame(FakeGame):
+        def read_resources(self):
+            nonlocal read_calls
+            read_calls += 1
+            return (None, None)
+
+    g = CountingGame([], damages=[60])
+    bot, logs, _ = make(g)
+    with pytest.raises(_Unreadable):
+        bot._stable_read()
+    # Each attempt in _stable_read reads twice (a and b)
+    assert read_calls == 8        # 4 tries x 2 reads: about 3 s of the 30 s countdown
+
+
+def test_battle_started_by_itself_recovers():
+    # Battle started by itself while waiting for the scout screen -> end clicked,
+    # search opened again (battle, find, attack clicked a second time), then normal attack; attacks_done == 1.
+    class SelfStartGame(FakeGame):
+        def __init__(self):
+            super().__init__([GOOD, GOOD], damages=[60])
+            self.scout_waits = 0
+
+        def screen_is(self, name):
+            if name == "scout" and self.scout_waits == 0:
+                self.scout_waits += 1
+                self.screen = "battle"     # countdown ended: battle started by itself
+                return False
+            return super().screen_is(name)
+
+    g = SelfStartGame()
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert "end" in g.clicks
+    assert g.clicks.count("battle") == 2
+    assert g.clicks.count("find") == 2
+    assert g.clicks.count("attack") == 2
+    assert bot.attacks_done == 1
+    assert any("la batalla empezo sola" in m for m in logs)
+
+
+def test_six_self_started_battles_in_a_row_stuck():
+    # Six self-started battles in a row -> _Stuck.
+    class AlwaysBattleGame(FakeGame):
+        def screen_is(self, name):
+            if name == "scout":
+                self.screen = "battle"
+                return False
+            return super().screen_is(name)
+
+    g = AlwaysBattleGame([GOOD, GOOD])
+    bot, logs, _ = make(g)
+    assert bot.run_once() is False
+    assert g.clicks.count("end") == 5     # 5 self-starts handled, on 6th raises _Stuck
+    assert any("veces en una misma busqueda" in m for m in logs)
+
+
+def test_run_timeout_recovers_and_later_attack_completes():
+    # run(): a timeout waiting for the scout screen -> _recover runs (dump "stuck" recorded),
+    # the loop continues and a later attack completes; the run does NOT end.
+    class TimeoutOnceGame(FakeGame):
+        def __init__(self, stop):
+            super().__init__([GOOD, GOOD], damages=[60])
+            self.stop = stop
+            self.failed = False
+
+        def screen_is(self, name):
+            if name == "scout" and not self.failed:
+                return False
+            return super().screen_is(name)
+
+        def dump_debug(self, reason):
+            super().dump_debug(reason)
+            if reason == "stuck":
+                self.failed = True
+                self.screen = "home"
+
+        def play_deployment(self):
+            res = super().play_deployment()
+            return res
+
+    stop = threading.Event()
+    g = TimeoutOnceGame(stop)
+    bot, logs, _ = make(g, stop=stop, timeout_s=2)
+    bot.log = lambda m: (logs.append(m), 'completado' in m and stop.set())   # end the run after one whole attack
+    bot.run()
+    assert "stuck" in g.dumped
+    assert any("Intento recuperar" in m for m in logs)
+    assert bot.attacks_done == 1
+
+
+def test_run_recoveries_in_a_row_pause_increases_and_resets():
+    # run(): recoveries in a row pause 30, 60, 90 ... capped at 300 s; finished attack resets count.
+    naps = []
+
+    class FlakyBot(Bot):
+        def _recover(self, reason):
+            pass
+
+        def _nap(self, seconds):
+            naps.append(seconds)
+
+    g = FakeGame([GOOD, GOOD], damages=[60])
+    stop = threading.Event()
+    bot = FlakyBot(g, config.Config(), lambda m: None, stop, sleep=lambda s: None)
+
+    step = 0
+    def fake_inner():
+        nonlocal step
+        step += 1
+        if step in (1, 2, 3):
+            raise _Stuck(f"failure {step}")
+        if step == 4:
+            bot.attacks_done += 1
+            return
+        if step == 5:
+            raise _Stuck("failure after attack")
+        stop.set()
+
+    bot._run_inner = fake_inner
+    bot.spend_free_slots = lambda: None
+    bot.wait_if_full = lambda: None
+    bot._reload_if_disconnected = lambda: False
+    bot._close_leftover_menu = lambda: None
+
+    bot.run()
+    assert naps[0] == 30
+    assert naps[1] == 60
+    assert naps[2] == 90
+    assert naps[3] == 30   # reset by the finished attack at step 4
+
+
+def test_recover_from_each_screen():
+    # results -> back
+    g1 = FakeGame([])
+    g1.screen = "results"
+    bot1, _, _ = make(g1)
+    bot1._recover("stuck results")
+    assert "back" in g1.clicks
+
+    # confirm -> ok
+    g2 = FakeGame([])
+    g2.screen = "confirm"
+    bot2, _, _ = make(g2)
+    bot2._recover("stuck confirm")
+    assert "ok" in g2.clicks
+
+    # scout -> end
+    g3 = FakeGame([])
+    g3.screen = "scout"
+    bot3, _, _ = make(g3)
+    bot3._recover("stuck scout")
+    assert "end" in g3.clicks
+
+    # battle -> end then ok
+    class BattleRecoverGame(FakeGame):
+        def __init__(self):
+            super().__init__([])
+            self.screen = "battle"
+
+        def click_button(self, name):
+            super().click_button(name)
+            if name == "end":
+                self.screen = "confirm"
+            elif name == "ok":
+                self.screen = "home"
+
+    g4 = BattleRecoverGame()
+    bot4, _, _ = make(g4)
+    bot4._recover("stuck battle")
+    assert g4.clicks == ["end", "ok"]
+
+    # popup -> dismissed
+    g5 = FakeGame([])
+    g5.screen = "bonus"
+    bot5, _, _ = make(g5)
+    bot5._recover("stuck popup")
+    assert g5.dismissed == 1
+
+    # open menu -> closed
+    g6 = FakeGame([])
+    g6.screen = "menu"
+    closed = []
+    def close():
+        if g6.screen == "menu":
+            closed.append(1)
+            g6.screen = "home"
+            return True
+        return False
+    g6.close_menu = close
+    bot6, _, _ = make(g6)
+    bot6._recover("stuck menu")
+    assert len(closed) == 1
+
+    # unknown screen that becomes home later -> waits
+    polls = 0
+    class DelayedHome(FakeGame):
+        def screen_is(self, name):
+            nonlocal polls
+            polls += 1
+            if polls >= 3 and name == "home":
+                return True
+            return False
+
+    g7 = DelayedHome([])
+    bot7, _, _ = make(g7)
+    bot7._recover("stuck unknown")
+    assert polls >= 3
+
+
+def test_recover_never_raises_stuck_even_if_never_home():
+    class NeverHome(FakeGame):
+        def screen_is(self, name):
+            return False
+
+    g = NeverHome([])
+    bot, logs, _ = make(g)
+    bot._recover("lost in void")
+    assert any("Intento recuperar" in m for m in logs)
+
+
+def test_recover_f8_aborts():
+    stop = threading.Event()
+    g = FakeGame([])
+    g.screen = "unknown"
+    bot, _, _ = make(g, stop=stop)
+    stop.set()
+    with pytest.raises(_Abort, match="Detenido"):
+        bot._recover("aborted")
+
+
+def test_run_window_not_found_ends_no_recovery():
+    g = FakeGame([], boom=True)
+    bot, logs, _ = make(g)
+    bot.run()
+    assert "stuck" not in g.dumped
+    assert any("no encontrada" in m for m in logs)
+
+
+def test_dialog_pressed_during_wait_raises_stuck_and_recovered_by_run():
+    class DialogWaitGame(FakeGame):
+        def __init__(self, stop):
+            super().__init__([GOOD, GOOD], damages=[60])
+            self.stop = stop
+            self.scout_checks = 0
+            self.wait_polls = 0
+            self.reloaded = False
+
+        def screen_is(self, name):
+            if name == "scout":
+                self.scout_checks += 1
+                if self.scout_checks == 1:
+                    return True               # satisfies _open_search
+                if not self.reloaded:
+                    self.wait_polls += 1
+                    return False              # holds _wait until reload
+            return super().screen_is(name)
+
+        def reload_if_disconnected(self):
+            if self.wait_polls >= 10 and not self.reloaded:
+                self.reloaded = True
+                self.screen = "home"
+                return True
+            return False
+
+        def play_deployment(self):
+            res = super().play_deployment()
+            return res
+
+    stop = threading.Event()
+    g = DialogWaitGame(stop)
+    bot, logs, _ = make(g, stop=stop)
+    bot.log = lambda m: (logs.append(m), 'completado' in m and stop.set())   # end the run after one whole attack
+    bot.run()
+    assert any("se recargo en mitad de un paso" in m for m in logs)
+    assert any("Intento recuperar" in m for m in logs)
+    assert bot.attacks_done == 1
+
+
+def test_dry_run_no_recovery_no_clicks():
+    class FailingDryGame(FakeGame):
+        def read_resources(self):
+            raise _Stuck("dry run stuck")
+
+    g = FailingDryGame([])
+    bot, logs, _ = make(g, dry_run=True)
+    bot.run()
+    assert g.clicks == []
+    assert "stuck" not in g.dumped
+
+
+def test_recover_never_clicks_when_village_is_already_home():
+    g = FakeGame([])
+    g.screen = "home"
+    bot, _, _ = make(g)
+    bot._recover("already home")
+    assert g.clicks == []
+
+
+def test_a_battle_look_alike_for_one_poll_is_not_a_self_started_battle():
+    """Review finding: between two villages the screen can show Terminar batalla without Siguiente for a
+    moment, the same picture as a battle that started by itself. One look must not end the search."""
+    class Blink(FakeGame):
+        def __init__(self):
+            super().__init__([GOOD, GOOD], damages=[60])
+            self.blinks = 1
+
+        def screen_is(self, name):
+            if self.screen == "scout" and self.blinks and name in ("scout", "battle"):
+                if name == "battle":
+                    self.blinks -= 1
+                    return True
+                return False
+            return super().screen_is(name)
+
+    g = Blink()
+    bot, logs, _ = make(g)
+    assert bot.run_once() is True
+    assert "end" not in g.clicks and g.clicks.count("battle") == 1
+    assert not any("empezo sola" in m for m in logs)
+
+
+def test_an_unexpected_error_is_recovered_from_like_a_stuck_step():
+    class Flaky(FakeGame):
+        def __init__(self):
+            super().__init__([GOOD, GOOD, GOOD, GOOD], damages=[60, 60])
+            self.boomed = False
+
+        def read_resources(self):
+            if not self.boomed:
+                self.boomed = True
+                raise RuntimeError("frame grab failed")
+            return super().read_resources()
+
+    g = Flaky()
+    stop = threading.Event()
+    bot, logs, _ = make(g, stop=stop)
+    bot.log = lambda m: (logs.append(m), "completado" in m and stop.set())
+    bot.run()
+    assert any("Error inesperado" in m and "frame grab failed" in m for m in logs)
+    assert "stuck" in g.dumped and bot.attacks_done == 1
+
+
+# --- every timeout must be a _Stuck (recovered), never an _Abort (end of the run) ---
+
+def test_loot_unreadable_too_many_villages_is_stuck_not_the_end():
+    g = FakeGame([(None, None)] * 200)
+    bot, _, _ = make(g)
+    with pytest.raises(_Stuck, match="No se pudo leer oro y elixir"):
+        bot._cycle()
+
+
+def test_a_battle_that_never_ends_is_stuck_not_the_end():
+    g = FakeGame([GOOD, GOOD], damages=[10] * 50)
+    bot, _, _ = make(g, battle_timeout_s=3)
+    with pytest.raises(_Stuck, match="final de la batalla"):
+        bot._cycle()
+
+
+def test_a_surrender_never_confirmed_is_stuck_not_the_end():
+    class Deaf(FakeGame):
+        def click_button(self, name):
+            self.clicks.append(name)                 # Rendirse is pressed but nothing happens
+
+    g = Deaf([])
+    g.screen = "battle"
+    bot, _, _ = make(g)
+    with pytest.raises(_Stuck, match="confirmar rendicion"):
+        bot._surrender()
+
+
+def test_a_search_that_never_starts_is_stuck_not_the_end():
+    class Deaf(FakeGame):
+        def click_button(self, name):
+            self.clicks.append(name)                 # the village stays on screen
+
+    g = Deaf([])
+    bot, _, _ = make(g)
+    with pytest.raises(_Stuck, match="La busqueda no arranco"):
+        bot._open_search()
+
+
+def test_recover_presses_nothing_on_the_village_even_if_it_also_looks_like_another_screen():
+    """The home check comes before every click: a village that also matched the scout or results picture
+    must not get Terminar batalla or Volver pressed on it."""
+    class Both(FakeGame):
+        def screen_is(self, name):
+            return name in ("home", "scout", "results", "confirm", "battle")
+
+    g = Both([])
+    bot, _, _ = make(g)
+    bot._recover("atasco")
+    assert g.clicks == []
+
+
+def test_recover_cancels_a_search_that_does_not_advance():
+    """Live: after a lost connection the game stayed on 'No se ha podido atacar esta aldea' with only a
+    Volver button; no known screen matched and the recovery just waited."""
+    class Clouds(FakeGame):
+        def __init__(self):
+            super().__init__([])
+            self.screen, self.cancelled = "clouds", 0
+
+        def cancel_search(self):
+            if self.screen != "clouds":
+                return False
+            self.cancelled += 1
+            self.screen = "home"
+            return True
+
+    g = Clouds()
+    bot, logs, _ = make(g)
+    bot._recover("atasco")
+    assert g.cancelled == 1 and g.clicks == []
+    assert any("Cancelo una busqueda" in m for m in logs)
+
+
+def test_a_dialog_in_the_middle_of_a_battle_is_pressed_and_the_run_goes_on():
+    class DialogInBattle(FakeGame):
+        def __init__(self):
+            super().__init__([GOOD, GOOD, GOOD, GOOD], damages=[10] * 40 + [60])
+            self.reloads = 0
+
+        def reload_if_disconnected(self):
+            if self.screen == "battle" and not self.reloads:
+                self.reloads += 1
+                self.screen = "home"                 # the game reloads into the village
+                self.damages = [60]
+                return True
+            return False
+
+    g = DialogInBattle()
+    stop = threading.Event()
+    bot, logs, _ = make(g, stop=stop)
+    bot.log = lambda m: (logs.append(m), "completado" in m and stop.set())
+    bot.run()
+    assert g.reloads == 1 and bot.attacks_done == 1
+    assert any("se recargo en mitad de un paso" in m for m in logs)
