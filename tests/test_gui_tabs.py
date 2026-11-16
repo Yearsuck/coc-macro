@@ -511,23 +511,54 @@ def test_claim_and_release_are_safe_from_several_threads(app):
     assert winners == {owner}                              # exactly one tab owns it
 
 
+def _size(app):
+    return tuple(int(v) for v in app.root.geometry().split("+")[0].split("x"))
+
+
+def _short_window(app):
+    """A window too short for the cards: they scroll, the log and the bottom row stay."""
+    app.root.geometry(f"{gui.MIN_SIZE[0]}x{gui.MIN_SIZE[1]}")
+    app.root.update()
+    app.root.update()                              # the layout pass runs when idle, after the <Configure>
+
+
 def test_the_window_is_never_taller_than_the_screen_and_keeps_its_add_button(app, monkeypatch):
     """On a 816 px high screen the old window (about 1080 px) hid '+ Añadir cuenta' below the screen."""
     monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 700)
-    app.panel._fit()
+    app._initial_size()
     app.root.update()
-    height = int(app.root.geometry().split("+")[0].split("x")[1])
-    assert height <= 700 - gui.SCREEN_MARGIN
+    assert _size(app)[1] <= 700 - gui.SCREEN_MARGIN
     root_bottom = app.root.winfo_rooty() + app.root.winfo_height()
     assert app.btn_add.winfo_ismapped()
     assert app.btn_add.winfo_rooty() + app.btn_add.winfo_height() <= root_bottom + 2      # inside the window
 
 
-def test_content_taller_than_the_window_is_reachable_by_scrolling(app, monkeypatch):
-    monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 700)
+def test_the_window_can_be_resized_both_ways_down_to_a_minimum(app):
+    assert app.root.resizable() == (True, True)
+    assert app.root.minsize() == gui.MIN_SIZE
+
+
+def test_a_state_change_does_not_undo_the_size_the_user_chose(app):
+    """The old window forced its geometry on every state change, so it snapped back while the bot ran."""
     panel = app.panel
-    panel._fit()
+    calibrate_panel(panel)
+    app.root.geometry("700x640")
     app.root.update()
+    for mode, phase in (("running", "search"), ("running", "wait_builder"), ("stopping", None), ("idle", None)):
+        panel.mode, panel.phase = mode, phase
+        panel._apply_mode(True)
+        app.root.update()
+        assert _size(app) == (700, 640)
+    panel.cfg.deployment = "ninguno"                # back to the setup screen
+    panel.refresh_state()
+    app.root.update()
+    assert panel.mode == "setup" and _size(app) == (700, 640)
+
+
+def test_content_taller_than_the_window_is_reachable_by_scrolling(app):
+    panel = app.panel
+    calibrate_panel(panel)
+    _short_window(app)
     assert panel.content.winfo_reqheight() > panel.canvas.winfo_height()                  # it does not fit
     region = [float(v) for v in str(panel.canvas.cget("scrollregion")).split()]
     assert region[3] >= panel.content.winfo_reqheight() - 1                               # but all of it scrolls
@@ -541,11 +572,10 @@ class _Wheel:
         self.widget, self.delta = widget, delta
 
 
-def test_the_wheel_scrolls_the_panel_but_not_over_the_log_or_a_dropdown(app, monkeypatch):
-    monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 700)
+def test_the_wheel_scrolls_the_panel_but_not_over_the_log_or_a_dropdown(app):
     panel = app.panel
-    panel._fit()
-    app.root.update()
+    calibrate_panel(panel)
+    _short_window(app)
     start = panel.canvas.yview()[0]
     app._on_wheel(_Wheel(panel.content, -120))                      # wheel down over the page
     app.root.update()
@@ -564,9 +594,158 @@ def test_a_wheel_event_from_nowhere_is_ignored(app):
     app._on_wheel(_Wheel("not a widget", -120))                      # must not raise
 
 
-def test_a_tall_screen_keeps_the_natural_height(app, monkeypatch):
+def test_a_big_screen_gets_the_default_size(app, monkeypatch):
     monkeypatch.setattr(app.root, "winfo_screenheight", lambda: 5000)
-    app.panel._fit()
+    monkeypatch.setattr(app.root, "winfo_screenwidth", lambda: 5000)
+    app._initial_size()
     app.root.update()
-    height = int(app.root.geometry().split("+")[0].split("x")[1])
-    assert height == app.root.winfo_reqheight()
+    assert _size(app) == gui.DEFAULT_SIZE
+
+
+def _only_the_state_card(panel):
+    """A panel whose cards are short, so that 'the window has room for them' can be tested on any screen."""
+    for card in (panel.rules, panel.reading, panel.prep):
+        card.grid_remove()
+    panel.update_idletasks()
+    panel._relayout()
+
+
+def test_the_cards_do_not_scroll_when_the_window_has_room_for_them(app):
+    """With room for everything there is no page scrollbar and the wheel has nothing to move."""
+    panel = app.panel
+    calibrate_panel(panel)
+    _only_the_state_card(panel)
+    app.root.geometry("1100x800")
+    for _ in range(4):
+        app.root.update()
+    assert panel.content.winfo_reqheight() <= panel.canvas.winfo_height()
+    assert not panel.vbar.winfo_ismapped()
+    app._on_wheel(_Wheel(panel.content, -120))
+    app.root.update()
+    assert panel.canvas.yview()[0] == 0.0
+
+
+# ── the log sits under the cards on a draggable divider ─────────────────────────
+
+def _panel_at(app, geometry):
+    app.root.geometry(geometry)
+    for _ in range(4):
+        app.root.update()
+    return app.panel
+
+
+def test_the_divider_gives_the_log_the_height_the_cards_do_not_need(app):
+    """When the cards fit the log takes all the rest, so a big window shows more log, not blank space."""
+    panel = app.panel
+    _only_the_state_card(panel)
+    _panel_at(app, "1100x1000")
+    assert panel.content.winfo_reqheight() <= panel.canvas.winfo_height() + 6
+    assert not panel.vbar.winfo_ismapped()
+    assert panel.log_pane.winfo_height() > panel.log_pane.winfo_reqheight() + 60        # it grew into the spare room
+
+
+def test_a_short_window_keeps_the_log_at_its_size_and_the_cards_scroll(app):
+    panel = _panel_at(app, "900x640")
+    assert panel.log_pane.winfo_height() >= panel.log_pane.winfo_reqheight() - 6        # the log did not shrink away
+    assert panel.canvas.winfo_height() < panel.content.winfo_reqheight()
+    assert panel.vbar.winfo_ismapped()
+
+
+def test_dragging_the_divider_changes_the_split_and_a_resize_keeps_it(app):
+    panel = _panel_at(app, "900x700")
+    before = panel.paned.sash_coord(0)[1]
+    panel.paned.sash_place(0, 0, before - 60)
+    panel.paned.event_generate("<ButtonRelease-1>")          # what letting go of the divider sends
+    app.root.update()
+    assert panel.paned.sash_coord(0)[1] == before - 60
+    log_height = panel.log_pane.winfo_height()
+    app.root.geometry("900x740")
+    for _ in range(3):
+        app.root.update()
+    assert panel.log_pane.winfo_height() == log_height           # the 40 px went to the cards, the user's split stayed
+
+
+# ── the layout follows the width ────────────────────────────────────────────────
+
+def test_the_cards_go_in_two_columns_when_wide_and_in_one_when_narrow(app):
+    panel = app.panel
+    calibrate_panel(panel)
+    _panel_at(app, "1100x900")
+    assert panel.layout == "wide"
+    assert panel.rules.grid_info()["column"] == 1                       # rules beside the state card
+    assert panel.state.grid_info()["column"] == 0
+    _panel_at(app, "640x900")
+    assert panel.layout == "narrow"
+    assert panel.rules.grid_info()["column"] == 0                       # everything stacked
+    assert panel.rules.grid_info()["row"] > panel.reading.grid_info()["row"] > panel.state.grid_info()["row"]
+    _panel_at(app, "1100x900")
+    assert panel.layout == "wide" and panel.rules.grid_info()["column"] == 1      # and back, nothing stuck
+
+
+def test_the_reading_tiles_share_one_row_or_split_two_by_two(app):
+    panel = app.panel
+    panel._grid_tiles(4)
+    assert {panel.tiles_grid.grid_slaves()[i].grid_info()["row"] for i in range(4)} == {0}
+    panel._grid_tiles(2)
+    assert sorted(w.grid_info()["row"] for w in panel.tiles_grid.grid_slaves()) == [0, 0, 1, 1]
+
+
+def test_the_recoveries_counter_is_hidden_until_there_is_one(app):
+    panel = app.panel
+    calibrate_panel(panel)                      # the state card is only on screen once the setup is done
+    app.root.update()
+    assert not panel.recov_box.winfo_ismapped()
+    panel._show_recoveries(3)
+    app.root.update()
+    assert panel.recov_box.winfo_ismapped() and panel.recov_counter.cget("text") == "3"
+    panel._show_recoveries(0)
+    app.root.update()
+    assert not panel.recov_box.winfo_ismapped()
+
+
+def test_the_panel_polls_the_recoveries_of_the_running_bot(app):
+    panel = app.panel
+    panel.bot = type("B", (), {"attacks_done": 4, "recoveries_done": 2})()
+    panel._poll()
+    app.root.update()
+    assert panel.counter.cget("text") == "4" and panel.recov_counter.cget("text") == "2"
+
+
+# ── the options follow the mode; one failing pass must not stop the window ─────
+
+def _pick_mode(panel, app, label):
+    panel.mode_combo.set(label)
+    panel.mode_combo.event_generate("<<ComboboxSelected>>")
+    for _ in range(3):
+        app.root.update()
+
+
+def test_the_heroes_option_and_the_help_line_follow_the_mode(app):
+    panel = app.panel
+    calibrate_panel(panel)
+    app.root.geometry("1000x900")
+    app.root.update()
+    assert not panel.hero_chk.winfo_ismapped()                          # the default mode ignores heroes
+    for key, label in gui.vm.MODES:
+        _pick_mode(panel, app, label)
+        assert panel.mode_help.cget("text") == gui.vm.mode_help(key), key
+        assert bool(panel.hero_chk.winfo_ismapped()) == (key == "busy"), key
+    _pick_mode(panel, app, gui.vm.mode_label("none"))
+    assert not panel.hero_chk.winfo_ismapped()                          # and it goes away again
+
+
+def test_a_failing_poll_still_arms_the_next_one(app):
+    """Review finding: an exception in one pass of the 50 ms poll skipped the re-arm and froze the window for good."""
+    panel = app.panel
+    panel.bot = type("B", (), {"attacks_done": 1, "recoveries_done": 1})()
+
+    def boom(_n):
+        raise RuntimeError("one bad pass")
+
+    panel._show_recoveries = boom
+    panel.root.after_cancel(panel._after_id)
+    panel._after_id = None
+    with pytest.raises(RuntimeError):
+        panel._poll()
+    assert panel._after_id is not None                                  # the next pass is scheduled anyway
+    panel.root.after_cancel(panel._after_id)

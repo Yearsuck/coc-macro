@@ -53,7 +53,7 @@ def test_nothing_calibrated_shows_the_setup_screen(app, monkeypatch):
     panel.refresh_state()
     assert panel.mode == "setup"
     assert panel.setup_title.cget("text") == "Falta preparar 2 pasos"
-    assert str(panel.setup.winfo_manager()) == "pack" and not panel.state.winfo_manager()
+    assert str(panel.setup.winfo_manager()) == "grid" and not panel.state.winfo_manager()
     assert [t.cget("text") for _, t in panel.chip_frames] == ["Juego no encontrado", "Sin calibrar", "Sin despliegue"]
 
 
