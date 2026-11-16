@@ -467,3 +467,64 @@ def test_native_dialog_on_real_dialogs(name, button):
                                   "wall_panel_cost_red", "search_failed"])
 def test_native_dialog_is_not_seen_on_game_screens(name):
     assert vision.native_dialog(cv2.imread(str(FIXTURES / f"{name}.png"))) is None
+
+
+def test_a_block_of_gold_walls_is_found():
+    """Live 2026-11-16: walls of a high level are drawn gold and cream, not steel blue. The detector only knew
+    the blue ones: the log said 'No veo el bloque de muros' with both storages full and a builder free, and
+    walls mode never upgraded anything."""
+    frame = cv2.imread(str(FIXTURES / "wall_block_gold.png"))
+    x, y = vision.find_wall_spot(frame)
+    assert 0.42 <= x <= 0.73 and 0.0 <= y <= 0.41               # inside the golden block, not on a neighbour
+    h, w = frame.shape[:2]
+    hue = cv2.cvtColor(frame[int(y * h) - 2:int(y * h) + 3, int(x * w) - 2:int(x * w) + 3], cv2.COLOR_BGR2HSV)[..., 0]
+    assert 10 <= np.median(hue) <= 35                           # and the pixel under the click is a gold wall
+
+
+def test_blue_walls_still_win_over_gold_things_in_the_same_village():
+    """The gold detector is only a fallback: a village whose block is blue keeps the spot it always had."""
+    frame = cv2.imread(str(FIXTURES / "wall_block_centered_top.png"))
+    x, y = vision.find_wall_spot(frame)
+    assert (round(x, 2), round(y, 2)) == (0.56, 0.63)
+
+
+@pytest.mark.parametrize("why,paint", [
+    ("a whole screen of sand or gold terrain", lambda f: f.__setitem__(slice(None), (60, 190, 230))),
+    ("only a gold button in a corner", lambda f: f.__setitem__((slice(600, 729), slice(0, 130)), (60, 190, 230))),
+])
+def test_gold_that_is_not_a_wall_block_is_ignored(why, paint):
+    frame = np.full((729, 1296, 3), (40, 90, 50), np.uint8)       # green grass
+    paint(frame)
+    assert vision.find_wall_spot(frame) is None, why
+
+
+def _blocks(blue=None, gold=None, size=(729, 1296)):
+    """Grass with a blue block and/or a gold block (x0, y0, x1, y1 in relative terms) painted on it."""
+    f = np.full((*size, 3), (40, 90, 50), np.uint8)
+    h, w = size
+    for colour, box in (((150, 130, 110), blue), ((60, 190, 230), gold)):
+        if box:
+            x0, y0, x1, y1 = box
+            f[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)] = colour
+    return f
+
+
+@pytest.mark.parametrize("why,kwargs,expect", [
+    ("blue block bigger: blue", dict(blue=(0.10, 0.30, 0.40, 0.70), gold=(0.55, 0.30, 0.70, 0.55)), "blue"),
+    ("a gold blob a bit bigger than a blue block is still not enough to switch", dict(blue=(0.10, 0.30, 0.30, 0.55), gold=(0.45, 0.20, 0.70, 0.55)), "blue"),
+    ("a small blue clump next to a big gold block: gold", dict(blue=(0.10, 0.60, 0.18, 0.75), gold=(0.40, 0.05, 0.75, 0.40)), "gold"),
+])
+def test_blue_wins_unless_gold_is_clearly_the_wall_block(why, kwargs, expect):
+    f = _blocks(**kwargs)
+    x, y = vision.find_wall_spot(f)
+    assert (x < 0.5) == (expect == "blue"), why
+
+
+def test_gold_over_a_third_of_the_screen_is_terrain_not_walls():
+    assert vision.find_wall_spot(_blocks(gold=(0.0, 0.0, 0.62, 0.55))) is None      # ~34% of the frame
+
+
+def test_the_wall_block_is_found_at_another_frame_size():
+    """The minimum area scales with the frame: a block that is 6% of the screen is found at any size."""
+    for size in ((535, 951), (450, 800)):
+        assert vision.find_wall_spot(_blocks(gold=(0.30, 0.05, 0.62, 0.35), size=size)) is not None
