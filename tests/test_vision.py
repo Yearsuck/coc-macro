@@ -528,3 +528,38 @@ def test_the_wall_block_is_found_at_another_frame_size():
     """The minimum area scales with the frame: a block that is 6% of the screen is found at any size."""
     for size in ((535, 951), (450, 800)):
         assert vision.find_wall_spot(_blocks(gold=(0.30, 0.05, 0.62, 0.35), size=size)) is not None
+
+
+def test_region_changed_ignores_glitter_but_sees_a_new_number():
+    """The gold 'Mejorar' button glitters: two looks at the same price differ by a little."""
+    rng = np.random.default_rng(1)
+    frame = np.full((729, 1296, 3), 120, np.uint8)
+    region = (0.5, 0.74, 0.6, 0.78)
+    a = vision.region_crop(frame, region)
+    noisy = frame.copy()
+    crop_h, crop_w = a.shape[:2]
+    ys, xs = rng.integers(0, crop_h, 5), rng.integers(0, crop_w, 5)
+    noisy[int(0.74 * 729) + ys, int(0.5 * 1296) + xs] = 255            # a few sparkles, about the 2 000 summed that was measured live
+    assert not vision.region_changed(a, vision.region_crop(noisy, region))
+    digits = frame.copy()
+    digits[int(0.745 * 729):int(0.77 * 729), int(0.51 * 1296):int(0.56 * 1296)] = 255   # a different price drawn
+    assert vision.region_changed(a, vision.region_crop(digits, region))
+
+
+def test_region_crop_says_cannot_tell_for_a_non_image():
+    assert vision.region_crop(object(), (0.1, 0.1, 0.2, 0.2)) is None
+    assert vision.region_crop(np.zeros((729, 1296, 3), np.uint8), (0.5, 0.5, 0.5, 0.5)) is None
+
+
+def test_item_button_span_finds_the_blue_button_of_the_real_wall_bar():
+    span = vision.item_button_span(cv2.imread(str(FIXTURES / "wall_bar_six_buttons.png")))
+    assert span is not None and abs(span[0] - 0.666) < 0.01 and abs(span[1] - 0.735) < 0.01
+
+
+@pytest.mark.parametrize("name", ["wall_block_gold", "village_no_menu", "menu_builders_tab_filtered", "storage_bars_full"])
+def test_item_button_span_is_none_on_screens_without_the_bar(name):
+    assert vision.item_button_span(cv2.imread(str(FIXTURES / f"{name}.png"))) is None
+
+
+def test_item_button_span_is_none_for_a_non_image():
+    assert vision.item_button_span(object()) is None

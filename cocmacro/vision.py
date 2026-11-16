@@ -44,6 +44,55 @@ def _valid(frame, region: Region) -> bool:
     return region[2] > region[0] and region[3] > region[1]
 
 
+ITEM_BUTTON_HSV = ((100, 190, 150), (112, 255, 255))     # the blue "upgrade with an item" button of the wall bar
+ITEM_BUTTON_BAND = (0.76, 0.86)                           # rows of the bar, relative
+ITEM_BUTTON_MIN_W = 0.03                                  # narrowest run of blue columns that is a button, relative
+ITEM_BUTTON_MIN_COVER = 0.08                              # share of the band rows a column needs to be blue: the button is a blue frame round a pale middle
+
+
+def item_button_span(frame) -> tuple[float, float] | None:
+    """Relative (x0, x1) of the blue 'upgrade with an item' button in the bar of a selected wall, None when there is
+    none. Pressing it spends a wall ring, not the resource the user chose, so the bot checks the spot it is about to
+    press against this instead of trusting the layout it measured (live: measured on a real bar, columns
+    0.666-0.735; nothing else in the bar reaches that saturation)."""
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3 or frame.shape[0] < 10:
+        return None
+    h, w = frame.shape[:2]
+    band = cv2.cvtColor(frame[int(ITEM_BUTTON_BAND[0] * h):int(ITEM_BUTTON_BAND[1] * h)], cv2.COLOR_BGR2HSV)
+    cols = ((cv2.inRange(band, *ITEM_BUTTON_HSV) > 0).mean(axis=0) >= ITEM_BUTTON_MIN_COVER).astype(np.uint8)
+    cols = cv2.morphologyEx(cols[None, :], cv2.MORPH_CLOSE, np.ones((1, 31), np.uint8))[0]    # the icon and the label cut the blue
+    best, start = None, None
+    for x in range(w + 1):
+        on = x < w and cols[x]
+        if on and start is None:
+            start = x
+        elif not on and start is not None:
+            if x - start >= ITEM_BUTTON_MIN_W * w and (best is None or x - start > best[1] - best[0]):
+                best = (start, x)
+            start = None
+    return None if best is None else (best[0] / w, best[1] / w)
+
+
+REGION_CHANGE_MIN = 6000     # summed |difference| of a region that means "something was redrawn" (see region_changed)
+
+
+def region_crop(frame, region: Region) -> np.ndarray | None:
+    """The pixels of a region, to compare two looks with `region_changed`. None when the frame is not an image
+    (a test double) or the region is empty: 'cannot tell', never 'unchanged'."""
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3:
+        return None
+    crop = ocr._crop(frame, region)
+    return crop.astype(np.int16) if crop.size else None
+
+
+def region_changed(before: np.ndarray, after: np.ndarray) -> bool:
+    """Did the text in a region change between two looks? A gold button glitters: identical prices differ by
+    ~2 000 summed (live: 0.03-0.32 per pixel over 21 x 97 px), while a changed number moves tens of thousands."""
+    if before.shape != after.shape:
+        return True
+    return int(np.abs(after - before).sum()) >= REGION_CHANGE_MIN
+
+
 def cost_is_red(frame: np.ndarray, region: Region) -> bool:
     """True if the price in `region` is in the game's 'cannot pay' colour. Digits are either white (payable) or
     salmon (not payable, about 255,110,110), so the red pixels are compared with the white ones (at least half as
