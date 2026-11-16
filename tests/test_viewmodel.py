@@ -1,3 +1,5 @@
+import pytest
+
 from cocmacro import config, viewmodel as vm
 
 
@@ -62,3 +64,46 @@ def test_mode_labels_roundtrip_and_unknown_means_none():
     for key, label in vm.MODES:
         assert vm.mode_from_label(vm.mode_label(key)) == key == vm.mode_from_label(label)
     assert vm.mode_from_label("???") == "none" and vm.mode_label("???") == vm.MODES[0][1]
+
+
+# ── texts of the new states and the mode help ──────────────────────────────────
+
+@pytest.mark.parametrize("phase,title", [("upgrade", "Mejorando"), ("wait_builder", "Esperando un constructor libre"),
+                                         ("recover", "Recuperandose de un atasco")])
+def test_phases_between_attacks_have_a_title(phase, title):
+    assert vm.state_title("running", phase) == title
+
+
+def test_phases_between_attacks_are_no_step_of_the_stepper():
+    for phase in ("upgrade", "wait_builder", "recover"):
+        assert all(state == "todo" for _, state in vm.phase_steps(phase))
+
+
+@pytest.mark.parametrize("mode", [k for k, _ in vm.MODES])
+def test_every_mode_says_what_it_does(mode):
+    assert vm.mode_help(mode).strip()
+
+
+def test_the_walls_help_says_it_waits_for_a_builder():
+    assert "constructor" in vm.mode_help("walls") and "llenar" in vm.mode_help("walls")
+
+
+def test_an_unknown_mode_gets_the_plain_text_not_an_error():
+    assert vm.mode_help("zzz") == vm.mode_help("none")
+
+
+def test_the_heroes_option_only_applies_to_the_cheapest_upgrade_mode():
+    assert [m for m, _ in vm.MODES if vm.hero_option_applies(m)] == ["busy"]
+
+
+@pytest.mark.parametrize("line,level", [
+    ("Atacando: oro 1, elixir 2", "ok"), ("Mejora lanzada (constructor)", "ok"), ("Ataque 7 completado", "ok"),
+    ("Siguiente: oro 1, elixir 2", "warn"), ("Aviso de recarga: pulso y espero la aldea", "warn"),
+    ("Deposito lleno y sin constructor libre: espero a que quede uno", "warn"), ("Cancelo una busqueda que no avanza", "warn"),
+    ("Error inesperado: boom", "bad"), ("Tiempo agotado esperando: aldea enemiga", "bad"), ("Durante la recuperacion: x", "bad"),
+    ("Tiempo agotado esperando: aldea enemiga. Intento recuperar", "bad"),
+    ("La busqueda no arranco. Intento recuperar", "bad"),          # the reason can be any message: the recovery wins
+    ("Mejorando muros", ""), ("Ataque raro", ""),
+])
+def test_log_lines_get_their_colour(line, level):
+    assert vm.log_level(line) == level

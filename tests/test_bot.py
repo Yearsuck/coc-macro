@@ -1040,3 +1040,39 @@ def test_a_dialog_in_the_middle_of_a_battle_is_pressed_and_the_run_goes_on():
     bot.run()
     assert g.reloads == 1 and bot.attacks_done == 1
     assert any("se recargo en mitad de un paso" in m for m in logs)
+
+
+# ── what the window is told: the phases between attacks and the recoveries ─────
+
+def test_a_recovery_is_announced_and_counted():
+    g = FakeGame([])
+    g.screen = "results"
+    phases = []
+    bot, _, _ = make(g, on_phase=phases.append)
+    bot._recover("atasco")
+    assert phases == ["recover"]
+
+
+def test_the_run_counts_every_recovery_it_starts():
+    class TimeoutTwice(FakeGame):
+        def __init__(self):
+            super().__init__([GOOD, GOOD], damages=[60])
+            self.stucks = 0
+
+        def screen_is(self, name):
+            if name == "scout" and self.stucks < 2:
+                return False
+            return super().screen_is(name)
+
+        def dump_debug(self, reason):
+            super().dump_debug(reason)
+            if reason == "stuck":
+                self.stucks += 1
+                self.screen = "home"
+
+    g = TimeoutTwice()
+    stop = threading.Event()
+    bot, logs, _ = make(g, stop=stop, timeout_s=2)
+    bot.log = lambda m: (logs.append(m), "completado" in m and stop.set())
+    bot.run()
+    assert bot.recoveries_done == 2 and bot.attacks_done == 1
