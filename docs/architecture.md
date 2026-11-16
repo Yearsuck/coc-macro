@@ -196,7 +196,7 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
 ### 2.6 GUI, Overlay, ViewModel, and Theme
 - **`cocmacro/gui.py`**: Desktop user interface.
   - *Architecture (`gui:App`, `gui:AccountPanel`)*: Built with Tkinter. `App` manages the root window, notebook tabs, global hotkeys, and update checks. Each tab embeds an `AccountPanel` representing an independent account.
-  - *AccountPanel*: Contains a window selector combobox, setup cards, live reading status, rule inputs, mode selector, deployment selector, execution buttons (Empezar, Parar, Calibrar, Grabar despliegue), and a scrolled text log.
+  - *AccountPanel*: Contains a window selector combobox, setup cards, live reading status, rule inputs, mode selector, deployment selector, execution buttons (Empezar, Parar, Calibrar, Grabar despliegue), and a scrolled text log. The layout follows the real width of the panel (`_relayout`: two columns from `WIDE_FROM`, one below; tiles, rules and buttons re-grid; every wrapping label takes its container's width) and the window is freely resizable. Cards and log sit in a vertical `PanedWindow`: the divider follows one rule (cards whole if the log keeps its size, else the log keeps it and the cards scroll) until the user drags it.
   - *Thread-to-UI Queue*: Bot workers run on background daemon threads and deliver phase transitions, live readings, and log messages to the GUI thread via thread-safe `queue.Queue`, polled every 50 ms (`_poll`).
   - *Window Ownership & Exclusivity*: Prevents two tabs from binding to the same game window (`App.claim_window`). Calibrating or recording requires exclusive access (`App.try_exclusive`), temporarily disabling actions on other tabs.
 - **`cocmacro/overlay.py`**: Transparent calibration HUD.
@@ -208,7 +208,7 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
   - *Palette & Components (`theme:card`, `theme:label`, `theme:button`, `theme:entry`, `theme:apply_ttk_style`)*: Dark theme color palette (dark background `#14181f`, card background `#1d232d`, gold accent `#f2c14e`, green `#238636`, danger `#c93c37`). Configures TTK styles for dark Comboboxes and Scrollbars.
 - **`cocmacro/__main__.py`**: Application entry point.
   - Calls `cocmacro.gui.main()`, which verifies the Supercell warning acceptance flag (`data/accepted.flag`) before starting the Tk event loop.
-- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.11.1"`.
+- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.11.2"`.
 
 ### 2.7 Updater and Preflight
 - **`cocmacro/preflight.py`**: Launch readiness verification.

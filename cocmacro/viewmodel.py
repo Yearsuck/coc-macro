@@ -3,8 +3,11 @@ from cocmacro.config import Config, format_mmss
 
 PHASES = [("search", "Buscar"), ("evaluate", "Evaluar"), ("deploy", "Desplegar"),
           ("watch", "Vigilar"), ("surrender", "Rendirse"), ("back", "Volver")]
+# upgrade, wait_builder and recover happen between attacks: they have a title but are no step of the stepper
 PHASE_TITLES = {"search": "Buscando aldea", "evaluate": "Evaluando aldea", "deploy": "Desplegando tropas",
-                "watch": "Vigilando la batalla", "surrender": "Rindiéndose", "back": "Volviendo al pueblo"}
+                "watch": "Vigilando la batalla", "surrender": "Rindiéndose", "back": "Volviendo al pueblo",
+                "upgrade": "Mejorando", "wait_builder": "Esperando un constructor libre",
+                "recover": "Recuperandose de un atasco"}
 
 
 def fmt_int(n: int | None) -> str:
@@ -79,3 +82,38 @@ def mode_label(mode: str) -> str:
 
 def mode_from_label(label: str) -> str:
     return next((k for k, v in MODES if v == label), "none")
+
+
+MODE_HELP = {
+    "none": "Solo ataca: no gasta recursos entre ataques.",
+    "walls": "Ataca hasta llenar oro o elixir, mejora muros con los dos y vuelve a atacar. "
+             "Si no hay constructor libre, espera a que quede uno.",
+    "busy": "Antes de cada ataque usa cada constructor, investigador o mascota libre en la mejora mas barata.",
+}
+
+
+def mode_help(mode: str) -> str:
+    return MODE_HELP.get(mode, MODE_HELP["none"])
+
+
+def hero_option_applies(mode: str) -> bool:
+    """'Heroes primero' only changes what the cheapest-upgrade routine picks."""
+    return mode == "busy"
+
+
+_LOG_BAD = ("Error", "No se pudo", "Atencion", "Tiempo agotado", "Durante la recuperacion")
+_LOG_WARN = ("Siguiente", "Sigo esperando", "Rindiendose", "Aviso de recarga", "Deposito lleno",
+             "Cancelo una busqueda")
+_LOG_OK = ("Atacando", "Hash correcto", "Mejora lanzada")
+
+
+def log_level(line: str) -> str:
+    """Colour of a log line: "ok", "warn", "bad" or "" (plain). The start of a recovery wins over the rest: its
+    line begins with the reason, which can be any other message."""
+    if "Intento recuperar" in line or line.startswith(_LOG_BAD):
+        return "bad"
+    if line.startswith(_LOG_WARN):
+        return "warn"
+    if line.startswith(_LOG_OK) or (line.startswith("Ataque ") and line.endswith(" completado")):
+        return "ok"
+    return ""
