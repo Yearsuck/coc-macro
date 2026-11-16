@@ -20,6 +20,35 @@ def _price_region(cfg: Config) -> tuple[float, float, float, float]:
     return (x0, y0, x1, min(y1, UPGRADE_COST_MAX_Y))
 MAX_ADDS = 250            # walls added one by one: the price turns red long before this
 SPOT_OFFSETS = ((0.0, 0.0), (-0.015, -0.03), (-0.03, -0.06))   # retries inside the wall block
+# The buttons of the wall bar are centred on the screen and a pitch apart. The bar has five buttons, or six when the
+# account has the blue 'upgrade with an item' one, and then every button sits half a pitch further left than where it
+# was calibrated (live 2026-11-16: the clicks fell in the gaps, so 'Mejorar mas' and the gold button were never pressed).
+WALL_BAR_PITCH = 0.0805
+CAP_UNCHANGED = 2         # looks at the price with no change after a '+1' that mean the game stopped adding walls
+
+
+WALL_BAR_Y_TOL = 0.06     # 'Marcar fila' must be found on the bar's row, or it is another icon
+WALL_BAR_LOOKS = 3        # looks at the screen to measure the bar before giving up and trusting the calibration
+ITEM_MARGIN = 0.012       # a click this close to the blue item button counts as on it (the gap between buttons is 0.007)
+
+
+def _wall_bar_shift(scr, cfg: Config, sleep=lambda _s: None) -> float:
+    """How far the bar is from where it was calibrated, in x. 'Marcar fila' is the button one pitch left of
+    'Mejorar mas'; where it is found tells the layout. The centred bar can only move in half pitches, so the
+    measurement is snapped to one (a few pixels of noise do not matter) and anything beyond a pitch is a false
+    match, not a layout."""
+    row = cfg.buttons["wall_more"][1]
+    for look in range(WALL_BAR_LOOKS):
+        found = scr.find("wall_panel")            # a redraw can hide it for a moment: look again before giving up
+        if found is not None and abs(found[1] - row) <= WALL_BAR_Y_TOL:
+            shift = found[0] - (cfg.buttons["wall_more"][0] - WALL_BAR_PITCH)
+            half = WALL_BAR_PITCH / 2
+            if abs(shift) > WALL_BAR_PITCH + half / 2:
+                return 0.0
+            return round(shift / half) * half
+        if look + 1 < WALL_BAR_LOOKS:
+            sleep(0.3)
+    return 0.0
 
 
 class Screen(Protocol):
@@ -114,21 +143,41 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
             log("Panel de muro no encontrado, no hay muros para mejorar")
             break
 
+        shift = _wall_bar_shift(scr, cfg, sleep)
+
+        def at(name: str) -> tuple[float, float]:
+            x, y = cfg.buttons[name]
+            return x + shift, y
+
         # Open the multi-wall panel
         check()
-        scr.click(*cfg.buttons["wall_more"])
+        scr.click(*at("wall_more"))
         sleep(CLICK_DELAY)
 
-        cost_region = cfg.regions[f"wall_cost_{resource}"]
+        x0, y0, x1, y1 = cfg.regions[f"wall_cost_{resource}"]
+        cost_region = (x0 + shift, y0, x1 + shift, y1)
         add_clicks = 0
 
-        # Phase 1: add one wall at a time until the cost turns red
+        # Phase 1: add one wall at a time until the cost turns red, or the game stops adding. Current versions
+        # refuse to add more walls than you can pay: the counter stops, the price stays white and only the
+        # 'Anadir' buttons turn red (live 2026-11-16: 250 useless clicks, nothing upgraded). A price that does
+        # not change over CAP_UNCHANGED looks in a row is the cap, and then nothing has to be taken off.
+        previous, unchanged, capped, moved = vision.region_crop(scr.grab(), cost_region), 0, False, False
         while add_clicks < MAX_ADDS:
             check()
-            scr.click(*cfg.buttons["wall_add1"])
+            scr.click(*at("wall_add1"))
             sleep(CLICK_DELAY)
             add_clicks += 1
-            if vision.cost_is_red(scr.grab(), cost_region):
+            frame = scr.grab()
+            if vision.cost_is_red(frame, cost_region):
+                break
+            now = vision.region_crop(frame, cost_region)
+            still = now is not None and previous is not None and not vision.region_changed(previous, now)
+            moved = moved or (now is not None and previous is not None and not still)
+            unchanged = unchanged + 1 if still else 0
+            previous = now
+            if unchanged >= CAP_UNCHANGED:
+                capped = True
                 break
         else:
             # Exhausted MAX_ADDS without turning red — give up this resource
@@ -137,15 +186,23 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
                 _reset_view(scr, cfg, check, sleep)       # drop the open panel before the next resource
                 continue
 
-        # Phase 2: the last wall made it unaffordable: remove that one
-        check()
-        scr.click(*cfg.buttons["wall_remove"])
-        sleep(CLICK_DELAY)
+        if capped and not moved:
+            # The price never moved: not even one wall was added (the first one is not affordable), so there is
+            # nothing to upgrade with this resource.
+            log(f"No se pudo anadir ningun muro con {resource}")
+            _reset_view(scr, cfg, check, sleep)
+            continue
 
-        if vision.cost_is_red(scr.grab(), cost_region):
+        # Phase 2: the last wall made it unaffordable: remove that one (nothing to remove at the cap)
+        if not capped:
+            check()
+            scr.click(*at("wall_remove"))
+            sleep(CLICK_DELAY)
+
+        if not capped and vision.cost_is_red(scr.grab(), cost_region):
             # Still red after one remove — try one more
             check()
-            scr.click(*cfg.buttons["wall_remove"])
+            scr.click(*at("wall_remove"))
             sleep(CLICK_DELAY)
             if vision.cost_is_red(scr.grab(), cost_region):
                 # Still cannot afford — give up this resource
@@ -155,8 +212,15 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
 
         # Gems are never spent: Mejorar is only pressed with a payable price (checked just above) and only
         # the exact "Mejorar muros" dialog is confirmed below
+        target = at(f"wall_up_{resource}")
+        item = vision.item_button_span(scr.grab())
+        if item is not None and item[0] - ITEM_MARGIN <= target[0] <= item[1] + ITEM_MARGIN:
+            # Whatever the layout measurement said, never press the item button: it spends a wall ring.
+            log(f"El clic de {resource} caeria sobre el boton de mejorar con objeto: no pulso nada")
+            _reset_view(scr, cfg, check, sleep)
+            continue
         check()
-        scr.click(*cfg.buttons[f"wall_up_{resource}"])
+        scr.click(*target)
         sleep(CLICK_DELAY)
 
         # Only the exact "Mejorar muros" dialog is confirmed (its title must be on screen)
@@ -174,6 +238,9 @@ def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
         if _dismiss_no_builder(scr, cfg, log, check, sleep):
             return started
         started = True
+        # The game is still animating the batch that just started (live: the next pass found no wall panel at
+        # the very spot that worked a minute later), and the next resource needs no selection left over.
+        _reset_view(scr, cfg, check, sleep)
 
     _reset_view(scr, cfg, check, sleep)
     return started
