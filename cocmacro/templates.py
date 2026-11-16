@@ -61,7 +61,10 @@ def threshold_for(name: str) -> float:
 # its red X and the 'Confirmar' label of the green button never change. Those two are generic (every dialog has
 # a red X), so they only count at the spot where this window draws them (relative centre, +-POS_TOL).
 POS_TOL = 0.05
-ALTERNATIVES = {"upgrade_window": ((("upgrade_window", None),),
+# The tab header of the Batalla menu is always at the top of the panel: matched anywhere else it is something else.
+BATTLE_MENU_AT = (0.18, 0.065)
+ALTERNATIVES = {"battle_menu": ((("battle_menu", BATTLE_MENU_AT),),),
+                "upgrade_window": ((("upgrade_window", None),),
                                    (("upgrade_window_x", (0.883, 0.077)), ("upgrade_window_confirm", (0.700, 0.833))))}
 
 

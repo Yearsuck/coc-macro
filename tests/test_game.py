@@ -488,3 +488,27 @@ def test_cancel_search_presses_volver_only_on_the_search_screen(tmp_path, monkey
     clicks.clear()
     shown[0] = "village_no_menu"
     assert g.cancel_search() is False and clicks == []
+
+
+def test_the_open_battle_menu_is_recognised_and_nothing_else_is(tmp_path, monkeypatch):
+    """Real capture of the Batalla menu (only its panel kept): it hides the Batalla button, so without this check
+    the bot took the village for 'loading' and waited for a scout screen that was not coming."""
+    from cocmacro import defaults
+    shown = {n: cv2.imread(str(FIX / "ui" / f"{n}.png")) for n in
+             ("battle_menu_open", "village_no_menu", "search_failed", "dialog_inactivity", "wall_block_gold")}
+    shown["scout"] = cv2.imread(str(FIX / "f004.png"))
+    current = ["battle_menu_open"]
+    monkeypatch.setattr(game.frames, "grab", lambda win: shown[current[0]])
+    g = game.RealGame(None, config.Config(), None, threading.Event(), defaults.DIR)
+    assert g.battle_menu_open() is True
+    for name in ("village_no_menu", "search_failed", "dialog_inactivity", "wall_block_gold", "scout"):
+        current[0] = name
+        assert g.battle_menu_open() is False, name
+    # the same header drawn somewhere else on the screen is not the menu
+    import numpy as np
+    moved = np.zeros_like(shown["battle_menu_open"])
+    h, w = moved.shape[:2]
+    moved[int(0.50 * h):int(0.50 * h) + int(0.15 * h), int(0.45 * w):int(0.45 * w) + int(0.45 * w)] =         shown["battle_menu_open"][int(0.02 * h):int(0.02 * h) + int(0.15 * h), int(0.02 * w):int(0.02 * w) + int(0.45 * w)]
+    shown["moved"] = moved
+    current[0] = "moved"
+    assert g.battle_menu_open() is False
