@@ -17,6 +17,7 @@ This directory contains test fixture images used mainly by `tests/test_ocr.py`, 
   - **Storage Bars** (`storage_bars_full.png`, `storage_bars_half_full.png`, `storage_bars_not_full.png`): Top-right village resource bars for detecting full storage capacity.
   - **Builder and Researcher Counters** (`counters_0_of_7_and_0_of_2.png`, `counters_1_of_7_and_0_of_2.png`, `menu_text_over_counters.png`): Hud indicators for available builders and laboratory researchers.
   - **Wall Panels** (`wall_block_centered_top.png`, `wall_block_panned_top.png`, `wall_panel_cost_red.png`): Wall cluster positions and multi-wall upgrade dialog with red unaffordable cost detection.
+  - **Construir list and filters** (`build_list_*.png`, `filter_popup_*.png`, `wall_selected_menu_closed.png`): lists with and without `Muro x N` rows, scrolled, the filter popup with each resource filter on or off, and the wall bar after a wall row was tapped and the menu closed (`tests/test_wall_rows.py`).
   - **Upgrade Menu Tabs** (`menu_builders_tab_filtered.png`, `menu_pets_tab.png`, `menu_researchers_tab.png`, `village_no_menu.png`): Construir menu navigation tabs and filter buttons.
 
 - **Isolated Number Crops (`crops/*.png`)**:

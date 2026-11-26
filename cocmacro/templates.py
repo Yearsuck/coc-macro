@@ -48,11 +48,44 @@ def score(frame: np.ndarray, name: str, dir: Path) -> tuple[float, tuple[float, 
 # 0.78-0.79 against each other, so they need a stricter cut than ordinary buttons.
 STRICT = 0.88
 STRICT_NAMES = {"filter_permanent", "filter_permanent_on", "filter_cost_min", "filter_cost_min_on",
-                "filter_hero", "filter_hero_on", "skip_arrojatroncos", "skip_destructor", "skip_tiradora"}
+                "filter_hero", "filter_hero_on", "skip_arrojatroncos", "skip_destructor", "skip_tiradora",
+                # the resource filters differ only in their icon colour; 'Muro' in a list row scores >= 0.93 on a
+                # wall row and <= 0.80 on any other name
+                "filter_gold", "filter_gold_on", "filter_elixir", "filter_elixir_on", "filter_dark", "filter_dark_on",
+                "wall_row_name"}
 
 
 def threshold_for(name: str) -> float:
     return STRICT if name in STRICT_NAMES else THRESHOLD
+
+
+def find_all(frame: np.ndarray, name: str, dir: Path, threshold: float | None = None) -> list[tuple[float, float]]:
+    """Every place where the saved image matches, as relative centres sorted top to bottom (a list shows the same
+    word on many rows, `score` only gives the best one). A hit silences the pixels around it, which also score
+    high: within half the template's height vertically and half its width horizontally."""
+    p = _path(name, dir)
+    if not p.exists():
+        return []
+    tpl = cv2.imread(str(p))
+    keep = LABEL_ONLY.get(name)
+    if keep and tpl is not None:
+        tpl = tpl[: max(8, int(tpl.shape[0] * keep))]
+    if tpl is None or tpl.shape[0] > frame.shape[0] or tpl.shape[1] > frame.shape[1]:
+        return []
+    cut = threshold if threshold is not None else threshold_for(name)
+    res = cv2.matchTemplate(frame, tpl, cv2.TM_CCOEFF_NORMED)
+    th, tw = tpl.shape[:2]
+    h, w = frame.shape[:2]
+    hits: list[tuple[float, float]] = []
+    taken: list[tuple[int, int]] = []
+    ys, xs = np.where(res >= cut)
+    for i in np.argsort(-res[ys, xs]):          # best first, so a hit suppresses its weaker neighbours
+        x, y = int(xs[i]), int(ys[i])
+        if any(abs(x - tx) <= tw / 2 and abs(y - ty) <= th / 2 for tx, ty in taken):
+            continue
+        taken.append((x, y))
+        hits.append(((x + tw / 2) / w, (y + th / 2) / h))
+    return sorted(hits, key=lambda c: c[1])
 
 
 # A screen the game draws in more than one way: it is there if ANY of the listed sets is fully matched. The

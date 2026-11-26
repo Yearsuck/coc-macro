@@ -57,12 +57,27 @@ class _Screen:
     def wall_spot(self):
         return vision.find_wall_spot(self.grab())
 
+    def drag(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        """Press at (x0, y0), pull to (x1, y1) in small steps and release: scrolls the Construir list (a single
+        jump is read as a tap by the game)."""
+        self.check()
+        steps = 15
+        winctl.post_mouse(self.game.win, "down", x0, y0)
+        for i in range(1, steps + 1):
+            time.sleep(0.03)
+            winctl.post_mouse(self.game.win, "move", x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps)
+        winctl.post_mouse(self.game.win, "up", x1, y1)
+        time.sleep(0.4)                         # the list keeps gliding for a moment after the release
+
     def has(self, template: str) -> bool:
         return templates.match(self.grab(), template, self.game.tpl_dir)
 
     def find(self, template: str):
         found = templates.score(self.grab(), template, self.game.tpl_dir)
         return found[1] if found is not None and found[0] >= templates.threshold_for(template) else None
+
+    def find_all(self, template: str) -> list[tuple[float, float]]:
+        return templates.find_all(self.grab(), template, self.game.tpl_dir)
 
 
 class RealGame:
