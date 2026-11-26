@@ -110,138 +110,178 @@ def _reset_view(scr: Screen, cfg: Config, check, sleep) -> None:
     _close_menu(scr, cfg, check, sleep)
 
 
-def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
-    """Upgrade as many walls as affordable for each resource. Returns True if at least one upgrade started."""
-    started = False
-    if scr.has("menu_close_x"):               # a menu left open would swallow the wheel and the clicks
-        _close_menu(scr, cfg, check, sleep)
+def _select_wall_on_screen(scr: Screen, cfg: Config, log, check, sleep, view: dict) -> str:
+    """The old selection, used when the Construir list cannot be used (template missing on an old config, filters
+    that will not set): zoom out, find the wall block by its colour and click it. 'selected', 'none' (no wall
+    panel: nothing to upgrade) or 'abort' (the block is not on screen, or another screen opened: touch nothing).
+    `view` remembers that the camera was already zoomed out during this routine."""
     zoom_out = getattr(scr, "zoom_out", None)
-    if zoom_out:
+    if zoom_out and not view.get("zoomed"):
         check()
         zoom_out()      # the camera is wherever the player left it; the wall block is only fixed when zoomed out
         sleep(0.6)
-    for resource in ("gold", "elixir"):
-        # Select a wall; the block moves a few pixels with the zoom, so retry a little further inside it
-        selected = False
-        finder = getattr(scr, "wall_spot", None)
-        found = finder() if finder else None      # located on screen: the camera is not always where we left it
-        if finder and found is None:
-            log("No veo el bloque de muros: no pulso nada")
-            return started
-        for dx, dy in SPOT_OFFSETS:
-            check()
-            x, y = found or cfg.buttons["wall_spot"]
-            scr.click(x + dx, y + dy)
-            sleep(CLICK_DELAY)
-            if scr.has("wall_panel"):
-                selected = True
-                break
-            if not scr.has("battle"):             # some other screen opened (shop, window...): touch nothing more
-                log("Se abrio una pantalla inesperada: paro las mejoras de muros")
-                return started
-        if not selected:
-            log("Panel de muro no encontrado, no hay muros para mejorar")
+        view["zoomed"] = True
+    # Select a wall; the block moves a few pixels with the zoom, so retry a little further inside it
+    finder = getattr(scr, "wall_spot", None)
+    found = finder() if finder else None      # located on screen: the camera is not always where we left it
+    if finder and found is None:
+        log("No veo el bloque de muros: no pulso nada")
+        return "abort"
+    for dx, dy in SPOT_OFFSETS:
+        check()
+        x, y = found or cfg.buttons["wall_spot"]
+        scr.click(x + dx, y + dy)
+        sleep(CLICK_DELAY)
+        if scr.has("wall_panel"):
+            return "selected"
+        if not scr.has("battle"):             # some other screen opened (shop, window...): touch nothing more
+            log("Se abrio una pantalla inesperada: paro las mejoras de muros")
+            return "abort"
+    log("Panel de muro no encontrado, no hay muros para mejorar")
+    return "none"
+
+
+def _upgrade_selected_walls(scr: Screen, cfg: Config, resource: str, log, check, sleep) -> str:
+    """With a wall selected: open the multi-wall panel, add walls while the price is payable and confirm the
+    upgrade with `resource`. 'started' (a batch was confirmed), 'nothing' (could not start one; the view is
+    reset) or 'abort' (no free builder: stop the whole routine)."""
+    shift = _wall_bar_shift(scr, cfg, sleep)
+
+    def at(name: str) -> tuple[float, float]:
+        x, y = cfg.buttons[name]
+        return x + shift, y
+
+    # Open the multi-wall panel
+    check()
+    scr.click(*at("wall_more"))
+    sleep(CLICK_DELAY)
+
+    x0, y0, x1, y1 = cfg.regions[f"wall_cost_{resource}"]
+    cost_region = (x0 + shift, y0, x1 + shift, y1)
+    add_clicks = 0
+
+    # Phase 1: add one wall at a time until the cost turns red, or the game stops adding. Current versions
+    # refuse to add more walls than you can pay: the counter stops, the price stays white and only the
+    # 'Anadir' buttons turn red (live 2026-11-16: 250 useless clicks, nothing upgraded). A price that does
+    # not change over CAP_UNCHANGED looks in a row is the cap, and then nothing has to be taken off.
+    previous, unchanged, capped, moved = vision.region_crop(scr.grab(), cost_region), 0, False, False
+    while add_clicks < MAX_ADDS:
+        check()
+        scr.click(*at("wall_add1"))
+        sleep(CLICK_DELAY)
+        add_clicks += 1
+        frame = scr.grab()
+        if vision.cost_is_red(frame, cost_region):
             break
+        now = vision.region_crop(frame, cost_region)
+        still = now is not None and previous is not None and not vision.region_changed(previous, now)
+        moved = moved or (now is not None and previous is not None and not still)
+        unchanged = unchanged + 1 if still else 0
+        previous = now
+        if unchanged >= CAP_UNCHANGED:
+            capped = True
+            break
+    else:
+        # Exhausted MAX_ADDS without turning red — give up this resource
+        if not vision.cost_is_red(scr.grab(), cost_region):
+            log(f"Coste de {resource} nunca se puso rojo tras {MAX_ADDS} clics")
+            _reset_view(scr, cfg, check, sleep)       # drop the open panel before the next resource
+            return "nothing"
 
-        shift = _wall_bar_shift(scr, cfg, sleep)
-
-        def at(name: str) -> tuple[float, float]:
-            x, y = cfg.buttons[name]
-            return x + shift, y
-
-        # Open the multi-wall panel
-        check()
-        scr.click(*at("wall_more"))
-        sleep(CLICK_DELAY)
-
-        x0, y0, x1, y1 = cfg.regions[f"wall_cost_{resource}"]
-        cost_region = (x0 + shift, y0, x1 + shift, y1)
-        add_clicks = 0
-
-        # Phase 1: add one wall at a time until the cost turns red, or the game stops adding. Current versions
-        # refuse to add more walls than you can pay: the counter stops, the price stays white and only the
-        # 'Anadir' buttons turn red (live 2026-11-16: 250 useless clicks, nothing upgraded). A price that does
-        # not change over CAP_UNCHANGED looks in a row is the cap, and then nothing has to be taken off.
-        previous, unchanged, capped, moved = vision.region_crop(scr.grab(), cost_region), 0, False, False
-        while add_clicks < MAX_ADDS:
-            check()
-            scr.click(*at("wall_add1"))
-            sleep(CLICK_DELAY)
-            add_clicks += 1
-            frame = scr.grab()
-            if vision.cost_is_red(frame, cost_region):
-                break
-            now = vision.region_crop(frame, cost_region)
-            still = now is not None and previous is not None and not vision.region_changed(previous, now)
-            moved = moved or (now is not None and previous is not None and not still)
-            unchanged = unchanged + 1 if still else 0
-            previous = now
-            if unchanged >= CAP_UNCHANGED:
-                capped = True
-                break
-        else:
-            # Exhausted MAX_ADDS without turning red — give up this resource
-            if not vision.cost_is_red(scr.grab(), cost_region):
-                log(f"Coste de {resource} nunca se puso rojo tras {MAX_ADDS} clics")
-                _reset_view(scr, cfg, check, sleep)       # drop the open panel before the next resource
-                continue
-
-        if capped and not moved:
-            # The price never moved: not even one wall was added (the first one is not affordable), so there is
-            # nothing to upgrade with this resource.
-            log(f"No se pudo anadir ningun muro con {resource}")
-            _reset_view(scr, cfg, check, sleep)
-            continue
-
-        # Phase 2: the last wall made it unaffordable: remove that one (nothing to remove at the cap)
-        if not capped:
-            check()
-            scr.click(*at("wall_remove"))
-            sleep(CLICK_DELAY)
-
-        if not capped and vision.cost_is_red(scr.grab(), cost_region):
-            # Still red after one remove — try one more
-            check()
-            scr.click(*at("wall_remove"))
-            sleep(CLICK_DELAY)
-            if vision.cost_is_red(scr.grab(), cost_region):
-                # Still cannot afford — give up this resource
-                log(f"Coste de {resource} sigue rojo tras dos eliminaciones")
-                _reset_view(scr, cfg, check, sleep)
-                continue
-
-        # Gems are never spent: Mejorar is only pressed with a payable price (checked just above) and only
-        # the exact "Mejorar muros" dialog is confirmed below
-        target = at(f"wall_up_{resource}")
-        item = vision.item_button_span(scr.grab())
-        if item is not None and item[0] - ITEM_MARGIN <= target[0] <= item[1] + ITEM_MARGIN:
-            # Whatever the layout measurement said, never press the item button: it spends a wall ring.
-            log(f"El clic de {resource} caeria sobre el boton de mejorar con objeto: no pulso nada")
-            _reset_view(scr, cfg, check, sleep)
-            continue
-        check()
-        scr.click(*target)
-        sleep(CLICK_DELAY)
-
-        # Only the exact "Mejorar muros" dialog is confirmed (its title must be on screen)
-        sleep(0.8)
-        if _dismiss_no_builder(scr, cfg, log, check, sleep):
-            return started
-        pos = scr.find("confirm_upgrade") if scr.has("walls_dialog") else None
-        if pos is None:
-            log(f"No aparece el dialogo de mejora de muros ({resource})")
-            _reset_view(scr, cfg, check, sleep)
-            continue
-        check()
-        scr.click(*pos)
-        sleep(CLICK_DELAY + 0.6)
-        if _dismiss_no_builder(scr, cfg, log, check, sleep):
-            return started
-        started = True
-        # The game is still animating the batch that just started (live: the next pass found no wall panel at
-        # the very spot that worked a minute later), and the next resource needs no selection left over.
+    if capped and not moved:
+        # The price never moved: not even one wall was added (the first one is not affordable), so there is
+        # nothing to upgrade with this resource.
+        log(f"No se pudo anadir ningun muro con {resource}")
         _reset_view(scr, cfg, check, sleep)
+        return "nothing"
 
+    # Phase 2: the last wall made it unaffordable: remove that one (nothing to remove at the cap)
+    if not capped:
+        check()
+        scr.click(*at("wall_remove"))
+        sleep(CLICK_DELAY)
+
+    if not capped and vision.cost_is_red(scr.grab(), cost_region):
+        # Still red after one remove — try one more
+        check()
+        scr.click(*at("wall_remove"))
+        sleep(CLICK_DELAY)
+        if vision.cost_is_red(scr.grab(), cost_region):
+            # Still cannot afford — give up this resource
+            log(f"Coste de {resource} sigue rojo tras dos eliminaciones")
+            _reset_view(scr, cfg, check, sleep)
+            return "nothing"
+
+    # Gems are never spent: Mejorar is only pressed with a payable price (checked just above) and only
+    # the exact "Mejorar muros" dialog is confirmed below
+    target = at(f"wall_up_{resource}")
+    item = vision.item_button_span(scr.grab())
+    if item is not None and item[0] - ITEM_MARGIN <= target[0] <= item[1] + ITEM_MARGIN:
+        # Whatever the layout measurement said, never press the item button: it spends a wall ring.
+        log(f"El clic de {resource} caeria sobre el boton de mejorar con objeto: no pulso nada")
+        _reset_view(scr, cfg, check, sleep)
+        return "nothing"
+    check()
+    scr.click(*target)
+    sleep(CLICK_DELAY)
+
+    # Only the exact "Mejorar muros" dialog is confirmed (its title must be on screen)
+    sleep(0.8)
+    if _dismiss_no_builder(scr, cfg, log, check, sleep):
+        return "abort"
+    pos = scr.find("confirm_upgrade") if scr.has("walls_dialog") else None
+    if pos is None:
+        log(f"No aparece el dialogo de mejora de muros ({resource})")
+        _reset_view(scr, cfg, check, sleep)
+        return "nothing"
+    check()
+    scr.click(*pos)
+    sleep(CLICK_DELAY + 0.6)
+    if _dismiss_no_builder(scr, cfg, log, check, sleep):
+        return "abort"
+    # The game is still animating the batch that just started (live: the next pass found no wall panel at
+    # the very spot that worked a minute later), and the next resource needs no selection left over.
+    _reset_view(scr, cfg, check, sleep)
+    return "started"
+
+
+def upgrade_walls(scr: Screen, cfg: Config, log, check, sleep) -> bool:
+    """Upgrade as many walls as affordable for each resource. Returns True if at least one upgrade started.
+
+    The wall is chosen from the Construir list (cheapest level, wherever it is in the village); when the list
+    cannot be used the colour-based selection of the wall block is the fallback. With the list, a resource
+    selects again after each batch (the cheapest level may be used up), up to MAX_LEVEL_PASSES times."""
+    started = False
+    if scr.has("menu_close_x"):               # a menu left open would swallow the wheel and the clicks
+        _close_menu(scr, cfg, check, sleep)
+    view: dict = {}
+    for resource in ("gold", "elixir"):
+        no_panel = False
+        for _pass in range(MAX_LEVEL_PASSES):
+            chosen = _select_cheapest_wall(scr, cfg, log, check, sleep)
+            if chosen == "none":
+                return started                # no wall in the list at all: nothing to do for any resource
+            if chosen == "lost":
+                _reset_view(scr, cfg, check, sleep)
+                break                         # the next resource selects again from a clean village
+            from_list = chosen == "selected"
+            if not from_list:
+                chosen = _select_wall_on_screen(scr, cfg, log, check, sleep, view)
+                if chosen == "abort":
+                    return started
+                if chosen == "none":
+                    no_panel = True
+                    break
+            outcome = _upgrade_selected_walls(scr, cfg, resource, log, check, sleep)
+            if outcome == "abort":
+                return started
+            if outcome != "started":
+                break
+            started = True
+            if not from_list:
+                break                         # the next pass would click the same block again
+        if no_panel:
+            break                             # no wall panel on the old path: the other resource finds none either
     _reset_view(scr, cfg, check, sleep)
     return started
 
@@ -281,6 +321,17 @@ BUSY_TABS = (
 )
 HERO_FILTER = (("filter_hero", "filter_hero_on"),)
 PLAIN_FILTERS = (("filter_permanent", "filter_permanent_on"), ("filter_cost_min", "filter_cost_min_on"))
+# The game remembers the resource filter between openings. The wall routine sets one, and a list still filtered by
+# it would hide the cheapest upgrades of the busy / surplus modes, so those modes switch all of them off.
+RESOURCE_FILTERS = (("filter_gold", "filter_gold_on"), ("filter_elixir", "filter_elixir_on"),
+                    ("filter_dark", "filter_dark_on"))
+# 'Muro' in the white font of a list row. Only wall rows select a wall when tapped instead of opening the
+# 'Mejorar tu ...' window, and they are the wall routine's job.
+WALL_ROW = "wall_row_name"
+LIST_SCROLL = (0.87, 0.80, 0.87, 0.30)    # a drag inside the list from low to high: scrolls the list down
+MAX_WALL_SCROLLS = 8      # drags to look for a wall row in one list (the walls sit near the top: a few are enough)
+MAX_LEVEL_PASSES = 3      # batches of one resource in one call: a batch may use up the cheapest wall level
+LIST_NAME_X_MIN = vision.LIST_X[0] - 0.08     # the name column starts at ~0.78, left of the list's price column
 # Rows the user never wants upgraded (siege machines that the 'Heroe' filter also lists): matched by their name text.
 NEVER_UPGRADE = ("skip_arrojatroncos", "skip_destructor", "skip_tiradora")
 ROW_PITCH = 0.0796        # distance between two rows of the list (58 px at 729 high)
@@ -312,8 +363,19 @@ def _clear_filter(scr: Screen, off: str, on: str, check, sleep) -> str:
     return "unknown"
 
 
+def _rows_of(scr: Screen, template: str) -> list[tuple[float, float]]:
+    """Every place of the list where `template` (a row's name) is seen, top to bottom. Screens that cannot give
+    every hit (old ones, test doubles) give their best one."""
+    finder = getattr(scr, "find_all", None)
+    hits = finder(template) if finder else [h for h in [scr.find(template)] if h is not None]
+    return [(x, y) for x, y in hits if vision.LIST_Y[0] <= y <= vision.ROW_Y_MAX and x >= LIST_NAME_X_MIN]
+
+
 def _name_is_blocked(scr: Screen, name_y: float) -> bool:
-    return any((pos := scr.find(n)) is not None and abs(pos[1] - name_y) < 0.03 for n in NEVER_UPGRADE)
+    if any((pos := scr.find(n)) is not None and abs(pos[1] - name_y) < 0.03 for n in NEVER_UPGRADE):
+        return True
+    # Walls are instant and belong to the wall routine: tapping their row selects a wall and opens no window
+    return any(abs(y - name_y) < 0.03 for _x, y in _rows_of(scr, WALL_ROW))
 
 
 def _allowed_row(scr: Screen, first: tuple[float, float], sleep=lambda _s: None) -> tuple[float, float] | None:
@@ -335,18 +397,113 @@ def _allowed_row(scr: Screen, first: tuple[float, float], sleep=lambda _s: None)
     return None
 
 
+def _find_wall_row(scr: Screen, check, sleep) -> tuple[float, float] | None:
+    """The topmost wall row of the open list, scrolling down until one shows or the list stops moving."""
+    scroll = getattr(scr, "drag", None)
+    area = (vision.LIST_X[0], vision.LIST_Y[0], vision.LIST_X[1], vision.LIST_Y[1])
+    for scrolls in range(MAX_WALL_SCROLLS + 1):
+        check()
+        rows = _rows_of(scr, WALL_ROW)
+        if rows:
+            return rows[0]
+        if scroll is None or scrolls == MAX_WALL_SCROLLS:
+            return None
+        before = vision.region_crop(scr.grab(), area)
+        scroll(*LIST_SCROLL)
+        sleep(0.3)
+        after = vision.region_crop(scr.grab(), area)
+        if before is not None and after is not None and not vision.region_changed(before, after):
+            return None                 # the list did not move: that was its end
+    return None
+
+
+def _set_list_filters(scr: Screen, cfg: Config, resource: tuple[str, str], log, check, sleep) -> bool:
+    """On the open Construir menu, builders tab: show only what `resource` pays, cheapest first and with no type
+    filter, which puts the wall levels near the top. False if a filter would not set. The popup is closed again."""
+    others = tuple(f for f in RESOURCE_FILTERS if f != resource)
+    clear = HERO_FILTER + PLAIN_FILTERS[:1] + others
+    popup_open = False
+    try:
+        check()
+        scr.click(*cfg.buttons["filter"])
+        sleep(CLICK_DELAY)
+        popup_open = True
+        for off, on in clear:
+            result = _clear_filter(scr, off, on, check, sleep)
+            if result == "stuck":
+                log(f"No pude apagar el filtro {off} (muros)")
+                return False
+            if result == "unknown":
+                log(f"No pude comprobar el filtro {off} (muros)")
+        if not all(_select_filter(scr, off, on, check, sleep) for off, on in (resource, PLAIN_FILTERS[1])):
+            log("Filtros no activados (muros)")
+            return False
+        return True
+    finally:
+        if popup_open:
+            check()
+            scr.click(*cfg.buttons["filter"])
+            sleep(CLICK_DELAY)
+
+
+def _select_cheapest_wall(scr: Screen, cfg: Config, log, check, sleep) -> str:
+    """Select one wall of the cheapest level from the Construir list, wherever it is in the village: tapping a
+    'Muro x N' row selects a wall of that level and moves the camera to it. Walls below level 9 cannot be paid
+    with elixir and are not in that list, so the gold list is the second look. 'selected' (the wall bar is on the
+    screen, menu closed), 'none' (the menu opened and no list has a wall row) or 'failed' (the menu or the filters
+    would not work, nothing tapped: the caller may fall back) or 'lost' (a row was tapped but no wall bar showed:
+    no fallback). The menu is left closed."""
+    check()
+    scr.click(*cfg.buttons["build"])
+    sleep(CLICK_DELAY + 0.6)
+    opened = False
+    try:
+        if not _menu_opened(scr, sleep):
+            log("El menu Construir no se abrio: no pulso nada")
+            return "failed"
+        opened = True
+        check()
+        scr.click(*cfg.buttons["tab_builders"])
+        sleep(CLICK_DELAY + 0.4)
+        for resource in (RESOURCE_FILTERS[1], RESOURCE_FILTERS[0]):          # elixir first, then gold
+            if not _set_list_filters(scr, cfg, resource, log, check, sleep):
+                return "failed"
+            row = _find_wall_row(scr, check, sleep)
+            if row is None:
+                continue
+            check()
+            scr.click(*row)                                       # on the name: the price column is a button
+            sleep(CLICK_DELAY + 0.4)
+            _close_menu(scr, cfg, check, sleep)
+            opened = False
+            bar_row = cfg.buttons["wall_more"][1]
+            for look in range(WALL_BAR_LOOKS):
+                bar = scr.find("wall_panel")
+                if bar is not None and abs(bar[1] - bar_row) <= WALL_BAR_Y_TOL:
+                    return "selected"
+                if look + 1 < WALL_BAR_LOOKS:
+                    sleep(0.3)
+            log("No aparece la barra del muro tras elegirlo en la lista")
+            return "lost"           # a row was tapped: the colour search would click blind over whatever it opened
+        log("No hay muros en la lista de Construir")
+        return "none"
+    finally:
+        if opened:
+            _close_menu(scr, cfg, check, sleep)
+
+
 def _first_row_upgrade(scr: Screen, cfg: Config, tab, log, check, sleep, filters=None, clear=None,
                        state=None) -> bool:
     """On the open Construir menu: open the tab, apply its filters, press the first row and confirm the
     green button of the 'Mejorar tu ...' window. Never presses the grey hammer button, never a red price.
 
     `filters` / `clear` override the tab's filters to select and name filters that must be OFF. On the
-    builders tab the hero filter is cleared by default (the game remembers it). `state`, if given, gets
+    builders tab the hero and resource filters are cleared by default (the game remembers them). `state`, if given, gets
     `no_builder=True` when the game said there is no free builder (trying again is pointless)."""
     slot, tab_button, _count, tab_filters = tab
     filters = tab_filters if filters is None else filters
     if clear is None:
-        clear = HERO_FILTER if slot == "builders" else ()
+        clear = HERO_FILTER + RESOURCE_FILTERS if slot == "builders" else ()
     check()
     scr.click(*cfg.buttons[tab_button])
     sleep(CLICK_DELAY + 0.4)
@@ -446,7 +603,7 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
                 hero_done, state = False, {}
                 if hero_try and slot == "builders":
                     hero_done = _first_row_upgrade(scr, cfg, tab, log, check, sleep, filters=HERO_FILTER,
-                                                   clear=PLAIN_FILTERS, state=state)
+                                                   clear=PLAIN_FILTERS + RESOURCE_FILTERS, state=state)
                     if not hero_done:
                         hero_try = False
                         if state.get("no_builder"):
