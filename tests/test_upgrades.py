@@ -1,7 +1,7 @@
 """Tests for cocmacro.upgrades — wall and building upgrade routines."""
 import pytest
 
-from cocmacro import vision
+from cocmacro import upgrades, vision
 from cocmacro.config import Config
 from cocmacro.upgrades import (
     MAX_ADDS,
@@ -18,6 +18,21 @@ class _Abort(Exception):
 
 
 ROW = (0.87, 0.20)
+
+
+_REAL_SELECT = upgrades._select_cheapest_wall
+
+
+@pytest.fixture(autouse=True)
+def _menu_path_fails(monkeypatch):
+    """Most wall tests describe the old, colour-based selection: the Construir list path says 'failed' so that one
+    runs. Tests of the list path ask for `real_select`."""
+    monkeypatch.setattr(upgrades, "_select_cheapest_wall", lambda *_a: "failed")
+
+
+@pytest.fixture
+def real_select(monkeypatch):
+    monkeypatch.setattr(upgrades, "_select_cheapest_wall", _REAL_SELECT)
 
 
 @pytest.fixture(autouse=True)
@@ -55,13 +70,15 @@ def _cfg():
 class FakeScreen:
     """Fake Screen recording clicks and providing configurable template results."""
 
-    def __init__(self, has_templates=None, find_templates=None):
+    def __init__(self, has_templates=None, find_templates=None, find_all_templates=None):
         self.clicks: list[tuple[float, float]] = []
         self.click_names: list[str] = []
         self._has = has_templates or {}
         self._find = find_templates or {}
+        self._find_all = find_all_templates or {}
         self._frame = object()  # sentinel
         self._menu_open = False
+        self.filter_without_menu = False        # the filter button of a closed menu is the gold bar: the gem shop
 
     def grab(self):
         return self._frame
@@ -70,6 +87,8 @@ class FakeScreen:
         self.clicks.append((x, y))
         # Record a human-readable name for common positions
         self.click_names.append(self._name_for(x, y))
+        if self.click_names[-1] == "filter" and not self._menu_open:
+            self.filter_without_menu = True
         if self.click_names[-1] == "build":
             self._menu_open = True
         elif self.click_names[-1] == "build_close":
@@ -90,6 +109,10 @@ class FakeScreen:
         if callable(v):
             return v()
         return v
+
+    def find_all(self, template: str) -> list[tuple[float, float]]:
+        v = self._find_all.get(template, [])
+        return v() if callable(v) else v
 
     def _name_for(self, x: float, y: float) -> str:
         cfg = _busy_cfg()
@@ -1142,3 +1165,167 @@ def test_a_price_that_never_moves_means_no_wall_could_be_added_and_nothing_is_pr
     assert result is False
     assert "wall_up_gold" not in scr.click_names and "wall_up_elixir" not in scr.click_names
     assert any("No se pudo anadir ningun muro" in m for m in logs)
+
+
+# -- walls from the Construir list ---------------------------------------------------------------
+
+import numpy as np
+
+from cocmacro.upgrades import NAME_DY, ROW_PITCH, WALL_ROW, _select_cheapest_wall
+
+FILTER_POS = {"hero": (0.10, 0.20), "permanent": (0.10, 0.30), "cost_min": (0.10, 0.40),
+              "gold": (0.50, 0.20), "elixir": (0.50, 0.30), "dark": (0.50, 0.40)}
+BAR = (0.6 - 0.0805, 0.6)            # where 'Marcar fila' sits on the wall bar of the test config
+
+
+class ListScreen(FakeScreen):
+    """The Construir list as the game draws it: filters that toggle when pressed, a list per resource filter
+    that scrolls by pages, rows that are wall rows, and the wall bar once a wall row was tapped and the menu closed."""
+
+    def __init__(self, elixir=(((0.795, 0.30),),), gold=(((0.795, 0.40),),), on=(), stuck=(), panel=True, **kw):
+        super().__init__(**kw)
+        self.pages = {"elixir": elixir, "gold": gold}
+        self.on, self.stuck, self.panel = set(on), set(stuck), panel
+        self.page, self.drags, self.tapped, self.selected = 0, [], [], False
+        self.at_tap: set[str] = set()
+
+    def _resource(self):
+        return "elixir" if "elixir" in self.on else "gold" if "gold" in self.on else None
+
+    def _rows(self):
+        res = self._resource()
+        return self.pages[res][self.page] if res else ()
+
+    def grab(self):
+        res = self._resource()
+        return np.full((100, 100, 3), {None: 0, "elixir": 60, "gold": 120}[res] + 10 * min(self.page, 7), dtype=np.uint8)
+
+    def click(self, x, y):
+        super().click(x, y)
+        for key, pos in FILTER_POS.items():
+            if (x, y) == pos and key not in self.stuck:
+                before = self._resource()
+                self.on ^= {key}
+                if self._resource() != before:
+                    self.page = 0
+        if (x, y) in self._rows():
+            self.tapped.append((x, y))
+            self.at_tap = set(self.on)
+            self.selected = True
+
+    def drag(self, x0, y0, x1, y1):
+        self.drags.append((x0, y0, x1, y1))
+        if self._resource() and self.page + 1 < len(self.pages[self._resource()]):
+            self.page += 1
+
+    def find_all(self, template):
+        return list(self._rows()) if template == WALL_ROW and self._menu_open else []
+
+    @staticmethod
+    def _filter(template):
+        key = template[len("filter_"):]
+        return key.removesuffix("_on"), key.endswith("_on")
+
+    def _is_filter(self, template):
+        return template.startswith("filter_") and self._filter(template)[0] in FILTER_POS
+
+    def has(self, template):
+        if self._is_filter(template):
+            base, wanted_on = self._filter(template)
+            return (base in self.on) == wanted_on
+        return super().has(template)
+
+    def find(self, template):
+        if self._is_filter(template):
+            return FILTER_POS[self._filter(template)[0]] if self.has(template) else None
+        if template == "wall_panel":
+            return BAR if self.selected and not self._menu_open and self.panel else None
+        return super().find(template)
+
+
+def _select(scr, cfg=None):
+    logs = []
+    result = _select_cheapest_wall(scr, cfg or _busy_cfg(), logs.append, lambda: None, _nop_sleep)
+    return result, logs
+
+
+def test_a_wall_row_in_sight_is_tapped_on_its_name_and_the_menu_closed(real_select):
+    scr = ListScreen()
+    result, _ = _select(scr)
+    n = scr.click_names
+    assert result == "selected"
+    assert n[:3] == ["build", "tab_builders", "filter"] and n[-1] == "build_close"
+    assert n.count("filter") == 2 and n[-2] == "(0.795,0.300)"
+    assert scr.tapped == [(0.795, 0.30)] and scr.drags == []
+    assert all(x < 0.86 for x, _y in scr.tapped)                  # never the price column
+    assert scr.at_tap == {"elixir", "cost_min"}                   # Heroe / Permanente / other resources off
+    assert not scr._menu_open and not scr.filter_without_menu
+
+
+def test_no_wall_row_in_either_list_taps_nothing_and_closes_the_menu(real_select):
+    scr = ListScreen(elixir=((),), gold=((),))
+    result, logs = _select(scr)
+    assert result == "none" and scr.tapped == [] and not scr._menu_open
+    assert any("No hay muros" in m for m in logs) and not scr.filter_without_menu
+    assert scr.click_names[-1] == "build_close"
+
+
+def test_a_menu_that_never_opens_presses_nothing_else(real_select):
+    scr = ListScreen(has_templates={"menu_close_x": False})
+    result, logs = _select(scr)
+    assert result == "failed" and scr.click_names == ["build"]
+    assert not scr.filter_without_menu and any("no se abrio" in m for m in logs)
+
+
+def _walls_screen(**kw):
+    return ListScreen(has_templates={"confirm_upgrade": True, "walls_dialog": True},
+                      find_templates={"confirm_upgrade": (0.5, 0.9)}, **kw)
+
+
+def _cost_tracker(monkeypatch, cfg):
+    counters = {"gold": 0, "elixir": 0}
+
+    def tracker(_frame, region):
+        for res in counters:
+            if region == cfg.regions[f"wall_cost_{res}"]:
+                counters[res] += 1
+                return counters[res] == 3
+        return False
+    monkeypatch.setattr(vision, "cost_is_red", tracker)
+    monkeypatch.setattr(vision, "region_crop", lambda _f, _r: None)
+
+
+def test_walls_from_the_list_run_the_bar_flow_without_zoom_or_colour_search(real_select, monkeypatch):
+    cfg = _busy_cfg()
+    _cost_tracker(monkeypatch, cfg)
+    monkeypatch.setattr(upgrades, "MAX_LEVEL_PASSES", 1)
+    scr = _walls_screen()
+    calls = []
+    scr.zoom_out = lambda: calls.append("zoom")
+    scr.wall_spot = lambda: calls.append("spot")
+    assert upgrade_walls(scr, cfg, lambda s: None, lambda: None, _nop_sleep) is True
+    n = scr.click_names
+    assert calls == [] and "wall_spot" not in n
+    assert "wall_more" in n and "wall_add1" in n and "wall_up_gold" in n and "wall_up_elixir" in n
+    assert not scr.filter_without_menu and not scr._menu_open
+
+
+def test_failed_list_selection_falls_back_to_zoom_and_the_colour_search(monkeypatch):
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: True)
+    scr = FakeScreen(has_templates={"wall_panel": True})
+    calls = []
+    scr.zoom_out = lambda: calls.append("zoom")
+    scr.wall_spot = lambda: calls.append("spot") or (0.61, 0.22)
+    upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert calls[:2] == ["zoom", "spot"] and scr.clicks[0] == (0.61, 0.22)
+
+
+# -- busy / surplus: wall rows are not upgrades, resource filters are cleared -----------------------
+
+def test_busy_skips_a_wall_row_and_presses_the_next_one(monkeypatch):
+    scr = _HeroScreen()
+    scr._find_all = {WALL_ROW: [(0.795, ROW[1] + NAME_DY)]}
+    ok, _ = _run(monkeypatch, scr)
+    assert ok is True
+    assert ROW not in scr.clicks and (ROW[0], ROW[1] + ROW_PITCH) in scr.clicks
+

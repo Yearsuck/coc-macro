@@ -161,7 +161,8 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
   - *Diagnostic Frame Dumps (`game:RealGame.dump_debug`)*: Saves full frames and cropped regions to `data/debug/<account>/` upon failed reads, maintaining a rolling buffer of 60 newest images (`DEBUG_KEEP = 60`).
 - **`cocmacro/upgrades.py`**: Automated village upgrades.
   - *Screen Protocol (`upgrades:Screen`)*: Protocol abstracting capture, clicks, template checks, camera zoom out, and wall detection.
-  - *Wall Upgrade Routine (`upgrades:upgrade_walls`)*: Zooms camera out (`_Screen.zoom_out`), clicks the wall block (`wall_spot`), opens the bulk upgrade panel (`wall_more`), clicks `wall_add1` repeatedly (up to `MAX_ADDS = 250`) until the resource price turns red, removes one or two walls (`wall_remove`) to restore an affordable cost, confirms the upgrade, and resets the village view by cycling the Construir menu.
+  - *Wall Selection (`upgrades:_select_cheapest_wall`)*: Opens Construir, sets the elixir filter plus `Coste min.` (then gold, for walls below level 9), scrolls the list with `_Screen.drag` until a `Muro x N` row (`wall_row_name`, found with `templates.find_all`) shows, taps it on its name and closes the menu; the wall stays selected and the bar is checked with `wall_panel`. It answers `selected`, `none` (no wall row) or `failed`, and on `failed` `upgrade_walls` falls back to the colour-based selection (`_select_wall_on_screen`). `_allowed_row` skips wall rows in the busy/surplus modes and `_first_row_upgrade` clears the resource filters the wall routine leaves.
+  - *Wall Upgrade Routine (`upgrades:upgrade_walls`)*: Selects the wall (list first; the old path zooms camera out (`_Screen.zoom_out`), clicks the wall block (`wall_spot`), opens the bulk upgrade panel (`wall_more`), clicks `wall_add1` repeatedly (up to `MAX_ADDS = 250`) until the resource price turns red, removes one or two walls (`wall_remove`) to restore an affordable cost, confirms the upgrade, and resets the village view by cycling the Construir menu).
   - *Building Upgrade Routine (`upgrades:upgrade_busy`)*: Opens the Construir menu, inspects tabs (`builders`, `researchers`, `pets`), selects filters (Permanente + Coste min, or Heroe if `prioritize_heroes` is enabled), skips forbidden siege machines (`skip_arrojatroncos`, `skip_destructor`, `skip_tiradora`), checks that row cost is not red, confirms the upgrade, and closes the menu.
 
 ### 2.4 Input, Player, and Recorder
@@ -208,7 +209,7 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
   - *Palette & Components (`theme:card`, `theme:label`, `theme:button`, `theme:entry`, `theme:apply_ttk_style`)*: Dark theme color palette (dark background `#14181f`, card background `#1d232d`, gold accent `#f2c14e`, green `#238636`, danger `#c93c37`). Configures TTK styles for dark Comboboxes and Scrollbars.
 - **`cocmacro/__main__.py`**: Application entry point.
   - Calls `cocmacro.gui.main()`, which verifies the Supercell warning acceptance flag (`data/accepted.flag`) before starting the Tk event loop.
-- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.11.2"`.
+- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.12.0"`.
 
 ### 2.7 Updater and Preflight
 - **`cocmacro/preflight.py`**: Launch readiness verification.
