@@ -14,6 +14,11 @@
     ["f030.png", "gold", 490979], ["f030.png", "elixir", 736480],  ["f030.png", "damage", 23],
     ["f040.png", "gold", 490206], ["f040.png", "elixir", 727254],
     ["f051.png", "gold", 489832], ["f051.png", "elixir", 497373],  ["f051.png", "damage", 36],
-    ["f052.png", "gold", 485387], ["f052.png", "elixir", 490451],  ["f052.png", "damage", 53]
+    ["f052.png", "gold", 485387], ["f052.png", "elixir", 490451],  ["f052.png", "damage", 53],
+    ["f101.png", "gold", 1247844], ["f101.png", "elixir", 1157942],
+    ["f102.png", "gold", 1362102], ["f102.png", "elixir", 1337834],
+    ["f103.png", "gold", 919998],  ["f103.png", "elixir", 3955234],
+    ["f104.png", "gold", 3399356], ["f104.png", "elixir", 3458428],
+    ["f105.png", "gold", 1387808], ["f105.png", "elixir", 1655798]
   ]
 }

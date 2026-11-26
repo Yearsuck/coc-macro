@@ -17,6 +17,8 @@ THRESH = 190          # green and red above this = text (also the cut the glyph 
 TINT_SLACK = 60       # blue may be this far below the cut: tinted (pale yellow) text, see _text_mask
 FALLBACK_THRESH = (170, 150, 205)   # light village skins merge background into the digits at one cut or another
 CLOCK_THRESH = 150    # the battle clock sits on a dark bar
+YELLOW_BLUE = (70, 140)          # blue of the yellow star-bonus loot digits (measured ~102), see _yellow_mask
+YELLOW_THRESH = (THRESH, 170)    # two cuts so a yellow read has a second one behind it in _agree
 GW, GH = 12, 18       # normalised glyph size
 MAX_DIST = 0.28       # mean abs diff above this -> glyph unknown -> None
 ASPECT_W = 0.5
@@ -61,6 +63,16 @@ def _split_touching(patch: np.ndarray, ref_w: float) -> list[np.ndarray]:
     return out or [patch]
 
 
+def _yellow_mask(crop: np.ndarray, thresh: int) -> np.ndarray:
+    """Pixels of a number drawn in saturated yellow. With the star bonus the scout screen says 'Botin disponible
+    x2', prints the loot in yellow (blue ~102, far below the tint cut) and puts a cream cupcake right after each
+    number, inside the read region (live 2026-11-27: loot unreadable in 5 villages in a row). Blue inside
+    YELLOW_BLUE keeps the digits and drops the cupcake (blue ~200+) and the edge of the coin icon (blue ~50)."""
+    px = crop.astype(np.int16)
+    lo, hi = YELLOW_BLUE
+    return ((px[..., 1:].min(axis=2) > thresh) & (px[..., 0] >= lo) & (px[..., 0] <= hi)).astype(np.uint8)
+
+
 def _text_mask(crop: np.ndarray, thresh: int) -> np.ndarray:
     """Pixels of the number. Green and red must clear the cut; blue only `TINT_SLACK` below it: the game
     tints the loot numbers (gold pale yellow, blue ~195-208 where white text has 255), and a cut on the
@@ -70,9 +82,9 @@ def _text_mask(crop: np.ndarray, thresh: int) -> np.ndarray:
     return ((px[..., 1:].min(axis=2) > thresh) & (px[..., 0] > thresh - TINT_SLACK)).astype(np.uint8)
 
 
-def segment(crop: np.ndarray, thresh: int = THRESH) -> list[np.ndarray]:
+def segment(crop: np.ndarray, thresh: int = THRESH, yellow: bool = False) -> list[np.ndarray]:
     """Left-to-right list of binary glyph images (tight bounding boxes)."""
-    mask = _text_mask(crop, thresh)
+    mask = _yellow_mask(crop, thresh) if yellow else _text_mask(crop, thresh)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     comps = [(stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_WIDTH],
               stats[i, cv2.CC_STAT_HEIGHT], i) for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 6]
@@ -132,8 +144,9 @@ def read_crop(crop: np.ndarray) -> int | None:
     if not _usable(crop):
         return None
     reads: list[int] = []
-    for thresh in (THRESH, *FALLBACK_THRESH):
-        glyphs = segment(crop, thresh)
+    cuts = [(t, False) for t in (THRESH, *FALLBACK_THRESH)] + [(t, True) for t in YELLOW_THRESH]
+    for thresh, yellow in cuts:
+        glyphs = segment(crop, thresh, yellow)
         chars = [classify(g) for g in glyphs]
         if glyphs and None not in chars:
             value = parse_digits("".join(chars).removesuffix("%"))      # the damage zone often includes the % sign
