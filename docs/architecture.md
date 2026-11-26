@@ -274,7 +274,7 @@ The attack loop executes continuously in a background thread for each active acc
        ▼
  7. Return to Village
     ├── Click Volver (back)
-    ├── Dismiss post-battle popups (e.g. star bonus Vale)
+    ├── Dismiss post-battle popups (the star bonus chest and its Continuar, or a Vale notice)
     ├── Wait for home village screen
     └── Increment attacks_done counter -> Return to Step 1
 ```

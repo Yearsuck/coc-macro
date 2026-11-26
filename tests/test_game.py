@@ -512,3 +512,29 @@ def test_the_open_battle_menu_is_recognised_and_nothing_else_is(tmp_path, monkey
     shown["moved"] = moved
     current[0] = "moved"
     assert g.battle_menu_open() is False
+
+
+def test_star_bonus_chest_is_opened_and_its_reward_collected(tmp_path, monkeypatch):
+    """Real captures of the star bonus (2026-11-27): a chest to tap ('Toca') until it opens, then the reward with a
+    green 'Continuar', then the village. One call goes through all of it; the village alone is left untouched."""
+    from cocmacro import defaults
+    shown = {n: cv2.imread(str(FIX / "ui" / f"{n}.png")) for n in
+             ("star_reward_chest", "star_reward_continue", "village_no_menu")}
+    sequence = ["star_reward_chest"] * 3 + ["star_reward_continue", "village_no_menu"]
+    clicks = []
+
+    def click(win, x, y, hold_s=0.08):
+        clicks.append((x, y))
+        if len(sequence) > 1:
+            sequence.pop(0)
+
+    monkeypatch.setattr(winctl, "click", click)
+    monkeypatch.setattr(game.frames, "grab", lambda win: shown[sequence[0]])
+    monkeypatch.setattr(game.time, "sleep", lambda s: None)
+    g = game.RealGame(None, config.Config(), None, threading.Event(), defaults.DIR)
+    assert g.dismiss_popup() is True
+    assert len(clicks) == 4
+    assert all(c == pytest.approx((0.49, 0.34), abs=0.03) for c in clicks[:3])     # on the chest
+    assert clicks[3] == pytest.approx((0.49, 0.855), abs=0.02)                       # Continuar
+    clicks.clear()
+    assert g.dismiss_popup() is False and clicks == []
