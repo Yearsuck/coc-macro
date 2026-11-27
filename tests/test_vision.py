@@ -105,13 +105,26 @@ def test_free_count_reads_zero_on_the_real_counters():
     assert vision.free_count(frame, RESEARCHERS) == 0
 
 
-def test_free_count_other_first_digit_means_some_free():
+def test_free_count_tells_one_free_builder_from_two_or_more():
+    """Live 2026-11-27: every non-zero counter read as 1, so walls mode never saw a spare builder and left 2 idle."""
+    two = cv2.imread(str(FIXTURES / "counters_2_of_6.png"))
+    one = cv2.imread(str(FIXTURES / "counters_1_of_7_and_0_of_2.png"))
+    assert vision.free_count(two, BUILDERS) == 2
+    strip = np.zeros((729, 1296, 3), dtype=np.uint8)
+    if one.shape[:2] == strip.shape[:2]:
+        strip = one
+    else:
+        strip[570:570 + one.shape[0], 1165:1165 + one.shape[1]] = one
+    assert vision.free_count(strip, BUILDERS) == 1
+
+
+def test_free_count_other_first_digit_means_two_or_more():
     frame = _live_frame()
     seven = ocr._load()["imgs"][list(ocr._load()["labels"]).index("7")]   # loot-font 7, a clearly non-zero shape
     patch = (cv2.resize((seven > 0.5).astype(np.uint8) * 255, (13, 14)))
     y0, x0 = 581, 1173
     frame[y0:y0 + 14, x0:x0 + 13] = np.stack([patch] * 3, axis=-1)    # replaces the first glyph
-    assert vision.free_count(frame, BUILDERS) == 1
+    assert vision.free_count(frame, BUILDERS) == 2
 
 
 @pytest.mark.parametrize("shape", [(9, 9, 3), (5, 5, 3), (1, 1, 3), (0, 0, 3)])

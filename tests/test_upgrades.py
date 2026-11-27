@@ -628,10 +628,19 @@ def test_busy_stops_a_tab_when_the_cheapest_item_cannot_be_paid(monkeypatch):
 
 
 def test_busy_does_not_loop_when_the_counter_never_drops(monkeypatch):
-    scr = _drain_screen(2, stick=True)
+    scr = _drain_screen(1, stick=True)
     cfg = _drain(monkeypatch, scr)
     upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
     assert scr.confirms == 1
+
+
+def test_busy_keeps_going_while_the_counter_says_two_or_more(monkeypatch):
+    """The counter is only known as 'two or more' above one, so it does not drop until the last builders."""
+    scr = _drain_screen(4)
+    cfg = _drain(monkeypatch, scr)
+    monkeypatch.setattr(vision, "free_count", lambda _f, r: min(scr.free, 2) if r == cfg.regions["tab_count_builders"] else 0)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
+    assert scr.confirms == 4
 
 
 def test_busy_drain_is_capped_per_tab(monkeypatch):

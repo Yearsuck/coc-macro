@@ -666,7 +666,8 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
                 if now is None:                       # blurry for a moment right after the confirm: look again
                     sleep(0.6)
                     now = vision.free_count(scr.grab(), cfg.regions[count_region])
-                if not now or now >= left or now <= reserve:   # done / unreadable / did not start / reserve reached
+                stuck = bool(now) and (now > left or now == left < vision.MANY_FREE)     # at 'two or more' it need not drop
+                if not now or stuck or now <= reserve:   # done / unreadable / did not start / reserve reached
                     break
                 left = now
             if not scr.has("menu_close_x"):             # the game closed the menu: nothing more to do

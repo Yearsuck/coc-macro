@@ -5,6 +5,7 @@ $py = if (Test-Path .venv\Scripts\python.exe) { '.venv\Scripts\python.exe' } els
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed --name CoCMacro `
   --add-data "cocmacro\glyphs.npz;cocmacro" `
   --add-data "cocmacro\counter_zero.npz;cocmacro" `
+  --add-data "cocmacro\counter_one.npz;cocmacro" `
   --add-data "cocmacro\defaults\templates;cocmacro\defaults\templates" `
   --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 `
   cocmacro\__main__.py
