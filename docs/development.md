@@ -171,7 +171,7 @@ The script invokes PyInstaller with the following arguments:
 - `--windowed`: Suppresses the Windows console window on launch.
 - `--name CoCMacro`: Sets the executable name to `CoCMacro.exe`.
 - `--add-data "cocmacro\glyphs.npz;cocmacro"`: Bundles the trained OCR glyph database.
-- `--add-data "cocmacro\counter_zero.npz;cocmacro"`: Bundles the builder counter zero reference.
+- `--add-data "cocmacro\counter_zero.npz;cocmacro"` and `counter_one.npz`: Bundle the builder counter references.
 - `--add-data "cocmacro\defaults\templates;cocmacro\defaults\templates"`: Bundles factory button template images.
 - `--hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32`: Ensures Windows platform backends for `pynput` are included.
 - `cocmacro\__main__.py`: Entry point script.

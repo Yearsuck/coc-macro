@@ -21,10 +21,17 @@ PRESS_NUDGES = ((0.0, 0.0), (0.008, 0.006), (-0.008, -0.006), (0.008, -0.006), (
 SEARCH_BACK_AT = (0.055, 0.905)     # where the search screen draws its Volver button
 DIALOG_CONFIRM_S = 0.3   # an unknown dialog must still be there after this long before it is pressed
 REPEAT_PRESS_S = 8      # a press this soon after the last one of the same button counts as repeated
+SHOP_CLOSE_AT = (0.968, 0.062)     # where the full-screen shop draws its red X
+STAR_BONUS_STEPS = 12     # chest taps + 'Continuar' presses at most (live: 3-4 taps, then one press)
+STAR_TAP_S, STAR_CONTINUE_S = 1.2, 2.0     # the chest shakes after a tap; the reward fades out after Continuar
 INACTIVITY_TEMPLATES = (("reload_inactive_title", 0.80), ("reload_inactive_body", 0.75))
 
 
 GOLD_HUE, ELIXIR_HUE = (18, 40), (135, 175)   # OpenCV hue of the gold and elixir storage bars
+
+
+class _Stopped(Exception):
+    """Stop was asked for in the middle of a camera move."""
 
 
 class _Screen:
@@ -116,13 +123,21 @@ class RealGame:
         return self._has(frames.grab(self.win), "battle_menu")
 
     def close_menu(self) -> bool:
-        """Something a stopped routine left open: an upgrade window first (its own X), then the Construir menu.
+        """Something a stopped routine left open: the goblin's offer or an upgrade window first (their own X),
+        then the Construir menu.
         The menu's X is pressed only where it really is (the corner is the gold bar when no menu is open and
         that opens the gem shop). True if a button was pressed."""
         frame = frames.grab(self.win)
+        if self._has(frame, "goblin_dialog"):
+            winctl.click(self.win, *self.cfg.buttons["goblin_close"])
+            return True
         if self._has(frame, "upgrade_window"):
             x, y = self.cfg.buttons["upgrade_window_close"]
             winctl.click(self.win, x, y)
+            return True
+        shop = self._found(frame, "upgrade_window_x")       # the same red X, drawn in the shop's corner
+        if shop is not None and abs(shop[0] - SHOP_CLOSE_AT[0]) <= templates.POS_TOL                 and abs(shop[1] - SHOP_CLOSE_AT[1]) <= templates.POS_TOL:
+            winctl.click(self.win, *shop)     # the shop opens by itself at times (offers, after a reload)
             return True
         found = templates.score(frame, "menu_close_x", self.tpl_dir)
         if found is None or found[0] < templates.threshold_for("menu_close_x"):
@@ -145,9 +160,37 @@ class RealGame:
         winctl.click(self.win, found[1][0], found[1][1])
         return True
 
+    def _found(self, frame, name: str):
+        found = templates.score(frame, name, self.tpl_dir)
+        return found[1] if found is not None and found[0] >= templates.threshold_for(name) else None
+
+    def _collect_star_bonus(self, first) -> bool:
+        """The star bonus once the day's stars are in (live 2026-11-27): a chest to tap ('Toca', a few taps, one
+        rolling pin each) until it opens, then the reward with a green 'Continuar', then the village. Goes through
+        all of it in one call (the screens come and go between the bot's own looks). True if it was on screen."""
+        if self._found(first, "star_chest") is None and self._found(first, "star_continue") is None:
+            return False
+        for i in range(STAR_BONUS_STEPS):
+            if self.stop.is_set():
+                break
+            frame = frames.grab(self.win)
+            button = self._found(frame, "star_continue")
+            chest = None if button else self._found(frame, "star_chest")
+            if button is None and chest is None:
+                break                                  # back in the village (or another screen): done
+            x, y = button or chest
+            dx, dy = PRESS_NUDGES[i % len(PRESS_NUDGES)]   # repeated taps at one point can be ignored
+            winctl.click(self.win, x + dx, y + dy)
+            time.sleep(STAR_CONTINUE_S if button else STAR_TAP_S)
+        return True
+
     def dismiss_popup(self) -> bool:
-        """A 'Vale' button on screen (star bonus after a win) is pressed where it is. True if pressed."""
-        found = templates.score(frames.grab(self.win), "ok", self.tpl_dir)
+        """The star bonus chest and its reward, or a 'Vale' button on screen (a notice after a win), are dealt
+        with where they are. True if something was pressed."""
+        frame = frames.grab(self.win)
+        if self._collect_star_bonus(frame):
+            return True
+        found = templates.score(frame, "ok", self.tpl_dir)
         if found is None or found[0] < templates.THRESHOLD:
             return False
         winctl.click(self.win, found[1][0], found[1][1])
@@ -271,6 +314,16 @@ class RealGame:
         return False
 
     def play_deployment(self) -> bool:
+        # The recording was made with the camera all the way out. The game keeps the zoom between screens, and the
+        # wall routine leaves it close on a wall (live 2026-11-27: every tap fell on a building, nothing deployed).
+        def check() -> None:
+            if self.stop.is_set():
+                raise _Stopped
+
+        try:
+            _Screen(self, check).zoom_out()
+        except _Stopped:
+            return False
         return player.play(self.win, self.recording, self.stop)
 
     def dump_debug(self, reason: str) -> None:

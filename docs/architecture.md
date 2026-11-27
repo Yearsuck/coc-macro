@@ -136,12 +136,13 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
 - **`cocmacro/vision.py`**: Base inspection and color analysis.
   - *Cost Color Detection (`vision:cost_is_red`)*: Determines whether an upgrade price is in the game's unaffordable salmon-red color (`r > 180` and `r - max(g, b) > 70`). Compares red pixels against white pixels (`red * 2 >= white`) to ensure short numbers in large regions are not misidentified.
   - *Storage Fill Analysis (`vision:storage_full`, `vision:dark_storage_full`)*: Clash of Clans resource storage bars fill from right to left (from the resource icon towards the left edge). Fullness is verified by sampling the leftmost portion of the bar in HSV color space (gold hue 18–40, elixir hue 135–175, dark elixir hue 125–160 with value 30–100).
-  - *Builder Slot Counter (`vision:free_count`)*: Reads village and menu builder counters (`free/total`). Evaluates whether the first digit matches the reference zero in `cocmacro/counter_zero.npz` (`ZERO_MAX_DIST = 0.30`). Returns 0 if zero, or 1 if at least one builder slot is free.
+  - *Builder Slot Counter (`vision:free_count`)*: Reads village and menu builder counters (`free/total`). Evaluates whether the first digit matches the reference zero in `cocmacro/counter_zero.npz` (`ZERO_MAX_DIST = 0.30`). Returns 0 if zero, 1 if it matches the one of `counter_one.npz`, and 2 (two or more) when it is unlike both (`MANY_MIN_DIST`), which is what tells walls mode it has a spare builder.
+  - *Goblin Builder (`vision:goblin_above`, `upgrades:_free`)*: A goblin's face above a builder or laboratory counter means the free slot costs gems, so it counts as 0 (walls mode waits for a real builder). The goblin's offer window (`goblin_dialog`) is closed with its 'X', like the 'no free builders' notice; its green gem button sits right beside where 'Vale' is pressed.
   - *Wall Detection (`vision:find_wall_spot`)*: Locates steel-blue wall segments using HSV range filtering `(85, 25, 110)` to `(110, 95, 215)`, morphological opening/closing, and connected component analysis, targeting the lowest wall segment while excluding static HUD zones.
   - *Building Row Detection (`vision:first_upgrade_row`)*: Detects sand-colored cards in the Construir (Build) menu list column.
 - **Binary Assets**:
   - `cocmacro/glyphs.npz`: Learned normalized digit feature maps, aspect ratios, and character labels.
-  - `cocmacro/counter_zero.npz`: Reference feature map and aspect ratio for the counter font's digit '0'.
+  - `cocmacro/counter_zero.npz`, `cocmacro/counter_one.npz`: Reference feature map and aspect ratio for the counter font's digits '0' and '1'.
 
 ### 2.3 Decisions and Bot Loop
 - **`cocmacro/decisions.py`**: Pure predicate functions.
@@ -209,7 +210,7 @@ The codebase in `cocmacro/` is divided into cohesive module groups. Every module
   - *Palette & Components (`theme:card`, `theme:label`, `theme:button`, `theme:entry`, `theme:apply_ttk_style`)*: Dark theme color palette (dark background `#14181f`, card background `#1d232d`, gold accent `#f2c14e`, green `#238636`, danger `#c93c37`). Configures TTK styles for dark Comboboxes and Scrollbars.
 - **`cocmacro/__main__.py`**: Application entry point.
   - Calls `cocmacro.gui.main()`, which verifies the Supercell warning acceptance flag (`data/accepted.flag`) before starting the Tk event loop.
-- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.12.0"`.
+- **`cocmacro/__init__.py`**: Package initialization exposing `__version__ = "0.13.0"`.
 
 ### 2.7 Updater and Preflight
 - **`cocmacro/preflight.py`**: Launch readiness verification.
@@ -274,7 +275,7 @@ The attack loop executes continuously in a background thread for each active acc
        ▼
  7. Return to Village
     ├── Click Volver (back)
-    ├── Dismiss post-battle popups (e.g. star bonus Vale)
+    ├── Dismiss post-battle popups (the star bonus chest and its Continuar, or a Vale notice)
     ├── Wait for home village screen
     └── Increment attacks_done counter -> Return to Step 1
 ```

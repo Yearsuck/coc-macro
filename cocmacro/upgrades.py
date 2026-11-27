@@ -27,8 +27,12 @@ WALL_BAR_PITCH = 0.0805
 CAP_UNCHANGED = 2         # looks at the price with no change after a '+1' that mean the game stopped adding walls
 
 
+COIN_DX = 0.028           # the coin of the gold price sits at the top right of its button: this much right of the centre
 WALL_BAR_Y_TOL = 0.06     # 'Marcar fila' must be found on the bar's row, or it is another icon
+DROP_X_TOL = 0.015        # the elixir drop sits one button right of the gold coin
 WALL_BAR_LOOKS = 3        # looks at the screen to measure the bar before giving up and trusting the calibration
+# 'Eliminar muro' is red while there is no wall to take off and white once two or more are marked
+WALL_TAKE_ONE = ("wall_take_one", "wall_take_one_on")
 ITEM_MARGIN = 0.012       # a click this close to the blue item button counts as on it (the gap between buttons is 0.007)
 
 
@@ -62,9 +66,21 @@ class Screen(Protocol):
 def free_slots(scr: Screen, cfg: Config) -> dict[str, int | None]:
     """Return the number of free builders and researchers (None = unreadable)."""
     return {
-        "builders": vision.free_count(scr.grab(), cfg.regions["free_builders"]),
-        "researchers": vision.free_count(scr.grab(), cfg.regions["free_researchers"]),
+        "builders": _free(scr.grab(), cfg, "free_builders"),
+        "researchers": _free(scr.grab(), cfg, "free_researchers"),
     }
+
+
+# Counters drawn under the face of whoever is free. A goblin works for gems, so its slot is not a free one; the pets
+# counter has a coin above it and no goblin.
+GOBLIN_COUNTERS = {"free_builders", "free_researchers", "tab_count_builders", "tab_count_researchers"}
+
+
+def _free(frame: np.ndarray, cfg: Config, name: str) -> int | None:
+    count = vision.free_count(frame, cfg.regions[name])
+    if count and name in GOBLIN_COUNTERS and vision.goblin_above(frame, cfg.regions[name]):
+        return 0
+    return count
 
 
 def _close_menu(scr: Screen, cfg: Config, check, sleep) -> None:
@@ -80,15 +96,16 @@ def _close_menu(scr: Screen, cfg: Config, check, sleep) -> None:
 
 
 def _dismiss_no_builder(scr: Screen, cfg: Config, log, check, sleep) -> bool:
-    """The game answers an upgrade with no free builder by offering to finish another task for gems. Close
-    that notice with its X (never the green gem button) and report that it was there."""
-    if not scr.has("no_builder_dialog"):
-        return False
-    log("No hay constructores libres: cierro el aviso sin gastar gemas")
-    check()
-    scr.click(*cfg.buttons["dialog_close"])
-    sleep(CLICK_DELAY)
-    return True
+    """The game answers an upgrade with no free builder by offering to finish another task, or to hire the goblin
+    builder, for gems. Close that notice with its X (never the green gem button) and report that it was there."""
+    for notice, close in (("no_builder_dialog", "dialog_close"), ("goblin_dialog", "goblin_close")):
+        if scr.has(notice):
+            log("No hay constructores libres: cierro el aviso sin gastar gemas")
+            check()
+            scr.click(*cfg.buttons[close])
+            sleep(CLICK_DELAY)
+            return True
+    return False
 
 
 def _menu_opened(scr: Screen, sleep, tries: int = 6) -> bool:
@@ -141,6 +158,19 @@ def _select_wall_on_screen(scr: Screen, cfg: Config, log, check, sleep, view: di
     return "none"
 
 
+def _bar_button(scr: Screen, names: tuple[str, ...], row: float, sleep) -> tuple[float, float] | None:
+    """Where a mark of the multi-wall bar is drawn right now, looked for around height `row`. `names` are the ways
+    the game draws that mark."""
+    for look in range(WALL_BAR_LOOKS):
+        for name in names:
+            found = scr.find(name)
+            if found is not None and abs(found[1] - row) <= WALL_BAR_Y_TOL:
+                return found
+        if look + 1 < WALL_BAR_LOOKS:
+            sleep(0.3)
+    return None
+
+
 def _upgrade_selected_walls(scr: Screen, cfg: Config, resource: str, log, check, sleep) -> str:
     """With a wall selected: open the multi-wall panel, add walls while the price is payable and confirm the
     upgrade with `resource`. 'started' (a batch was confirmed), 'nothing' (could not start one; the view is
@@ -156,26 +186,57 @@ def _upgrade_selected_walls(scr: Screen, cfg: Config, resource: str, log, check,
     scr.click(*at("wall_more"))
     sleep(CLICK_DELAY)
 
-    x0, y0, x1, y1 = cfg.regions[f"wall_cost_{resource}"]
-    cost_region = (x0 + shift, y0, x1 + shift, y1)
+    # The multi-wall bar changes shape: '+10' is only there with ten or more walls left to add, so its buttons are
+    # not where the bar of a single wall said they would be (live 2026-11-27: with two walls of a level the clicks
+    # fell between buttons and on the village for hours, selecting buildings that offer gems). Press only what is
+    # seen. Both marks look the same at every wall level: the coin on the gold price ('+1' is the button left of the
+    # gold one and elixir the one to its right) and the red 'Eliminar muro' label.
+    # Adding walls can reshape it again ('+10' goes away), so it is measured anew after every change.
+    price = cfg.regions["wall_cost_gold"]
+    shift, take, cost_region = 0.0, (0.0, 0.0), price
+
+    def measure() -> bool:
+        nonlocal shift, take, cost_region
+        coin = _bar_button(scr, ("wall_coin",), (price[1] + price[3]) / 2, sleep)
+        found = _bar_button(scr, WALL_TAKE_ONE, cfg.buttons["wall_remove"][1], sleep)
+        # walls below level 9 only take gold: the elixir price is pressed only with its drop seen beside the coin
+        drop = coin and resource == "elixir" and _bar_button(scr, ("wall_drop",), coin[1], sleep)
+        if resource == "elixir" and coin and not (drop and abs(drop[0] - coin[0] - WALL_BAR_PITCH) <= DROP_X_TOL):
+            log("Este muro no se mejora con elixir: no pulso nada")
+            _reset_view(scr, cfg, check, sleep)
+            return False
+        if coin is None or found is None:
+            log("No reconozco los botones de la barra de muros: no pulso nada")
+            _reset_view(scr, cfg, check, sleep)
+            return False
+        shift, take = coin[0] - COIN_DX - cfg.buttons["wall_up_gold"][0], found
+        x0, y0, x1, y1 = cfg.regions[f"wall_cost_{resource}"]
+        cost_region = (x0 + shift, y0, x1 + shift, y1)
+        return True
+
+    if not measure():
+        return "nothing"
     add_clicks = 0
 
     # Phase 1: add one wall at a time until the cost turns red, or the game stops adding. Current versions
     # refuse to add more walls than you can pay: the counter stops, the price stays white and only the
     # 'Anadir' buttons turn red (live 2026-11-16: 250 useless clicks, nothing upgraded). A price that does
-    # not change over CAP_UNCHANGED looks in a row is the cap, and then nothing has to be taken off.
-    previous, unchanged, capped, moved = vision.region_crop(scr.grab(), cost_region), 0, False, False
+    # not change over CAP_UNCHANGED looks in a row is the cap, and then nothing has to be taken off. A price that
+    # never moved and is not red is the one wall that can be added: it is upgraded too (a level with one wall left
+    # would otherwise be picked from the list for ever).
+    previous, unchanged, capped = vision.region_crop(scr.grab(), cost_region), 0, False
     while add_clicks < MAX_ADDS:
         check()
         scr.click(*at("wall_add1"))
         sleep(CLICK_DELAY)
         add_clicks += 1
+        if not measure():
+            return "nothing"
         frame = scr.grab()
         if vision.cost_is_red(frame, cost_region):
             break
         now = vision.region_crop(frame, cost_region)
         still = now is not None and previous is not None and not vision.region_changed(previous, now)
-        moved = moved or (now is not None and previous is not None and not still)
         unchanged = unchanged + 1 if still else 0
         previous = now
         if unchanged >= CAP_UNCHANGED:
@@ -188,9 +249,7 @@ def _upgrade_selected_walls(scr: Screen, cfg: Config, resource: str, log, check,
             _reset_view(scr, cfg, check, sleep)       # drop the open panel before the next resource
             return "nothing"
 
-    if capped and not moved:
-        # The price never moved: not even one wall was added (the first one is not affordable), so there is
-        # nothing to upgrade with this resource.
+    if capped and vision.cost_is_red(scr.grab(), cost_region):
         log(f"No se pudo anadir ningun muro con {resource}")
         _reset_view(scr, cfg, check, sleep)
         return "nothing"
@@ -198,14 +257,18 @@ def _upgrade_selected_walls(scr: Screen, cfg: Config, resource: str, log, check,
     # Phase 2: the last wall made it unaffordable: remove that one (nothing to remove at the cap)
     if not capped:
         check()
-        scr.click(*at("wall_remove"))
+        scr.click(take[0], cfg.buttons["wall_remove"][1])
         sleep(CLICK_DELAY)
+        if not measure():
+            return "nothing"
 
     if not capped and vision.cost_is_red(scr.grab(), cost_region):
         # Still red after one remove — try one more
         check()
-        scr.click(*at("wall_remove"))
+        scr.click(take[0], cfg.buttons["wall_remove"][1])
         sleep(CLICK_DELAY)
+        if not measure():
+            return "nothing"
         if vision.cost_is_red(scr.grab(), cost_region):
             # Still cannot afford — give up this resource
             log(f"Coste de {resource} sigue rojo tras dos eliminaciones")
@@ -590,7 +653,7 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
             log("El menu Construir no se abrio: no pulso nada")
             return False
         frame = scr.grab()
-        free = {t[0]: vision.free_count(frame, cfg.regions[t[2]]) for t in BUSY_TABS}
+        free = {t[0]: _free(frame, cfg, t[2]) for t in BUSY_TABS}
         todo = [t for t in BUSY_TABS if (only is None or t[0] in only) and (free[t[0]] or 0) > keep.get(t[0], 0)]
         if not todo:
             log("Nada libre en el menu Construir")
@@ -612,11 +675,12 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
                     break
                 started = True
                 log(f"Mejora lanzada ({slot}{', heroe' if hero_done else ''})")
-                now = vision.free_count(scr.grab(), cfg.regions[count_region])
+                now = _free(scr.grab(), cfg, count_region)
                 if now is None:                       # blurry for a moment right after the confirm: look again
                     sleep(0.6)
-                    now = vision.free_count(scr.grab(), cfg.regions[count_region])
-                if not now or now >= left or now <= reserve:   # done / unreadable / did not start / reserve reached
+                    now = _free(scr.grab(), cfg, count_region)
+                stuck = bool(now) and (now > left or now == left < vision.MANY_FREE)     # at 'two or more' it need not drop
+                if not now or stuck or now <= reserve:   # done / unreadable / did not start / reserve reached
                     break
                 left = now
             if not scr.has("menu_close_x"):             # the game closed the menu: nothing more to do

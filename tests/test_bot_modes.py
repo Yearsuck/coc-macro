@@ -574,6 +574,28 @@ def test_the_reserved_builder_is_trusted_when_the_counter_blinks_after_the_surpl
     assert g.kinds[0] == "surplus" and "walls" in g.kinds
 
 
+def test_walls_wait_when_only_the_goblin_is_left_after_the_surplus():
+    """The surplus can take the last real builder (the goblin counted among the free ones): a counter that then
+    reads 0 is believed, the walls wait for a builder instead of running into the goblin's offer."""
+    class LastOne(KeepGame):
+        def upgrade(self, kind, log=None, check=None):
+            ok = super().upgrade(kind, log, check)
+            if kind == "surplus":
+                self.builders = 0
+            return ok
+
+    g = LastOne(builders=2, levels=[{"gold": True, "elixir": False}])
+    logs = []
+
+    def sleep(_s):
+        if g.builders == 0 and any("sin constructor libre" in m for m in logs):
+            assert "walls" not in g.kinds                           # still waiting: the walls were not tried
+            g.builders = 1
+
+    Bot(g, config.Config(mode="walls"), logs.append, threading.Event(), sleep=sleep).spend_free_slots()
+    assert any("sin constructor libre" in m for m in logs) and "walls" in g.kinds
+
+
 def test_the_walls_wait_for_the_hud_after_the_surplus_before_looking_at_the_counter():
     slept = []
     g = KeepGame(builders=3, levels=[{"gold": True, "elixir": False}])

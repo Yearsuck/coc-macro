@@ -66,10 +66,13 @@ def test_shipped_buttons_are_never_taken_for_each_other():
     """The threshold is low enough to tolerate soft renders only if the look-alike buttons stay far apart."""
     import cv2
     from cocmacro import defaults
+    from cocmacro.upgrades import WALL_TAKE_ONE
     imgs = {p.stem: cv2.imread(str(p)) for p in defaults.DIR.glob("*.png")}
     for a, ta in imgs.items():
         for b, tb in imgs.items():
             if a == b or ta.shape[0] > tb.shape[0] + 12 or ta.shape[1] > tb.shape[1] + 12:
+                continue
+            if {a, b} <= set(WALL_TAKE_ONE):                      # one button in its two colours: either may match
                 continue
             frame = cv2.copyMakeBorder(tb, 6, 6, 6, 6, cv2.BORDER_REPLICATE)
             margin = 0.05 if a in templates.STRICT_NAMES else 0.1    # look-alike filter buttons use the strict cut

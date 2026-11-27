@@ -15,6 +15,7 @@ __all__ = [
     "storage_full",
     "dark_storage_full",
     "free_count",
+    "goblin_above",
     "cost_is_red",
     "native_dialog",
 ]
@@ -206,30 +207,34 @@ def dark_storage_full(frame: np.ndarray, region: Region) -> bool | None:
 ZERO_FILE = Path(__file__).with_name("counter_zero.npz")
 MIN_COUNTER_GLYPH_H = 9    # px at 1296 wide: village counters are 14 tall, the ones inside the menu 10
 ZERO_MAX_DIST = 0.30   # measured: another '0' of the counter ~0.1, any other digit >= 0.6
-_zero: tuple[np.ndarray, float] | None = None
+ONE_FILE = Path(__file__).with_name("counter_one.npz")
+# A first digit this far from both '0' and '1' is a bigger number (measured: other '1's <= 0.32, a '2' 0.70). The
+# margin leans to 'one': reading a lone builder as 'two or more' would spend the one reserved for the walls.
+MANY_MIN_DIST = 0.45
+MANY_FREE = 2          # what free_count says for two or more
+_refs: dict[Path, tuple[np.ndarray, float]] = {}
 
 
-def _zero_ref() -> tuple[np.ndarray, float]:
-    global _zero
-    if _zero is None:
-        z = np.load(ZERO_FILE)
-        _zero = (z["img"], float(z["aspect"]))
-    return _zero
+def _digit_distance(feat: np.ndarray, asp: float, file: Path) -> float:
+    if file not in _refs:
+        z = np.load(file)
+        _refs[file] = (z["img"], float(z["aspect"]))
+    ref, ref_aspect = _refs[file]
+    return float(np.abs(feat - ref).mean() + ocr.ASPECT_W * abs(asp - ref_aspect))
 
 
 def free_count(frame: np.ndarray, region: Region) -> int | None:
-    """Free slots of a 'free/total' counter: 0 when its first digit is the counter's '0', otherwise 1
-    (at least one free; the exact number is not needed). None when nothing readable is there.
+    """Free slots of a 'free/total' counter, as far as the bot needs them: 0, 1, or 2 meaning 'two or more'
+    (what tells walls mode it has a spare builder). None when nothing readable is there.
 
-    The counter font differs from the loot font that ocr.classify knows, so only the zero is recognised
-    (by shape, against a reference cut from the real game) and any other digit just means 'some free'.
+    The counter font differs from the loot font that ocr.classify knows, so only '0' and '1' are recognised
+    (by shape, against references cut from the real game); a digit unlike both is a bigger one.
     """
     if not _valid(frame, region):
         return None
     crop = ocr._crop(frame, region)
     if not ocr._usable(crop):
         return None
-    ref, ref_aspect = _zero_ref()
     for thresh in (ocr.THRESH, *ocr.FALLBACK_THRESH):
         glyphs = [g for g in ocr.segment(crop, thresh=thresh) if g.size]
         if not 3 <= len(glyphs) <= 5:      # a counter is digit, slash, digit (up to two digits each)
@@ -237,9 +242,30 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
         if min(g.shape[0] for g in glyphs) < MIN_COUNTER_GLYPH_H:     # small print of lists and timers is not a counter
             continue
         feat, asp = ocr.features(glyphs[0])
-        dist = float(np.abs(feat - ref).mean() + ocr.ASPECT_W * abs(asp - ref_aspect))
-        return 0 if dist <= ZERO_MAX_DIST else 1
+        if _digit_distance(feat, asp, ZERO_FILE) <= ZERO_MAX_DIST:
+            return 0
+        return MANY_FREE if _digit_distance(feat, asp, ONE_FILE) >= MANY_MIN_DIST else 1
     return None
+
+
+# The goblin's lime skin in the box above a counter: its face covers >= 0.2 of it, a human face or the scenery behind
+# the panel 0.0 (measured on 230 captures, 2026-11-27).
+GOBLIN_HSV_LOW, GOBLIN_HSV_HIGH = (25, 110, 165), (45, 255, 255)
+GOBLIN_ICON_H = 0.035      # the face sits this far above the counter's digits
+GOBLIN_MIN_SHARE = 0.10
+
+
+def goblin_above(frame: np.ndarray, region: Region) -> bool:
+    """True when the face drawn above a 'free/total' counter is a goblin's."""
+    x0, y0, x1, _ = region
+    box = (x0, max(0.0, y0 - GOBLIN_ICON_H), x1, y0)
+    if not _valid(frame, box):
+        return False
+    crop = ocr._crop(frame, box)
+    if crop.size == 0:
+        return False
+    skin = cv2.inRange(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV), GOBLIN_HSV_LOW, GOBLIN_HSV_HIGH)
+    return bool(skin.mean() / 255 >= GOBLIN_MIN_SHARE)
 
 
 WALL_HSV_LOW, WALL_HSV_HIGH = (85, 25, 110), (110, 95, 215)    # steel-blue walls, measured on real captures
