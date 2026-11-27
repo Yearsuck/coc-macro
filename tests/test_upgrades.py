@@ -1,9 +1,16 @@
 """Tests for cocmacro.upgrades — wall and building upgrade routines."""
+from pathlib import Path
+
+import cv2
 import pytest
 
-from cocmacro import upgrades, vision
+from cocmacro import defaults, templates, upgrades, vision
 from cocmacro.config import Config
 from cocmacro.upgrades import (
+    COIN_DX,
+    WALL_BAR_PITCH,
+    WALL_TAKE_ONE,
+    _bar_button,
     MAX_ADDS,
     _price_region,
     _select_filter,
@@ -105,6 +112,16 @@ class FakeScreen:
         return v
 
     def find(self, template: str) -> tuple[float, float] | None:
+        if template == "wall_coin" and template not in self._find:
+            # the multi-wall bar of a screen that does not say otherwise is drawn where it was calibrated
+            cfg = _cfg()
+            price = cfg.regions["wall_cost_gold"]
+            return cfg.buttons["wall_up_gold"][0] + COIN_DX, (price[1] + price[3]) / 2
+        if template == "wall_take_one" and template not in self._find:
+            return _cfg().buttons["wall_remove"]
+        if template == "wall_drop" and template not in self._find:
+            coin = self.find("wall_coin")                       # the elixir button is right of the gold one
+            return coin and (coin[0] + WALL_BAR_PITCH, coin[1])
         v = self._find.get(template)
         if callable(v):
             return v()
@@ -952,7 +969,7 @@ def test_the_price_region_stops_above_the_struck_through_full_price():
 
 # ── the wall bar is centred: an extra button shifts every button of it ──────────
 
-def _run_walls_with_panel_at(monkeypatch, panel_x):
+def _run_walls_with_panel_at(monkeypatch, panel_x, seen=None):
     """upgrade_walls with 'Marcar fila' found at x = panel_x; returns (clicks by name, regions asked to cost_is_red)."""
     cfg = _cfg()
     regions, counters = [], {"n": 0}
@@ -964,7 +981,8 @@ def _run_walls_with_panel_at(monkeypatch, panel_x):
 
     monkeypatch.setattr(vision, "cost_is_red", cost)
     scr = FakeScreen(has_templates={"wall_panel": True, "walls_dialog": True},
-                     find_templates={"wall_panel": (panel_x, cfg.buttons["wall_more"][1]), "confirm_upgrade": (0.5, 0.9)})
+                     find_templates={"wall_panel": (panel_x, cfg.buttons["wall_more"][1]), "confirm_upgrade": (0.5, 0.9),
+                                     **(seen or {})})
     upgrade_walls(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
     return cfg, scr, regions
 
@@ -977,7 +995,9 @@ def test_walls_bar_with_a_sixth_button_moves_every_click_half_a_pitch_left(monke
     cfg0 = _cfg()
     marcar_fila_calibrated = cfg0.buttons["wall_more"][0] - WALL_BAR_PITCH
     shift = -WALL_BAR_PITCH / 2
-    cfg, scr, regions = _run_walls_with_panel_at(monkeypatch, marcar_fila_calibrated + shift + 0.005)   # a little measuring noise
+    seen = {"wall_coin": (cfg0.buttons["wall_up_gold"][0] + shift + COIN_DX, (cfg0.regions["wall_cost_gold"][1] + cfg0.regions["wall_cost_gold"][3]) / 2),
+            "wall_take_one": (cfg0.buttons["wall_remove"][0] + shift, cfg0.buttons["wall_remove"][1])}
+    cfg, scr, regions = _run_walls_with_panel_at(monkeypatch, marcar_fila_calibrated + shift + 0.005, seen)   # a little measuring noise
     for name in ("wall_more", "wall_add1", "wall_remove", "wall_up_gold", "wall_up_elixir"):
         x, y = cfg.buttons[name]
         assert any(abs(cx - (x + shift)) < 0.001 and abs(cy - y) < 0.001 for cx, cy in scr.clicks), name
@@ -1122,7 +1142,8 @@ def test_the_click_is_never_sent_over_the_blue_item_button(monkeypatch):
                 shown[int(0.70 * 729):int(0.75 * 729), int(x0 * 1296):int(x1 * 1296)] = (min(adds, 4) * 40) % 256
             return shown
 
-    scr = OnTheBar(has_templates={"wall_panel": True, "walls_dialog": True}, find_templates={"confirm_upgrade": (0.5, 0.9)})
+    scr = OnTheBar(has_templates={"wall_panel": True, "walls_dialog": True},
+                   find_templates={"confirm_upgrade": (0.5, 0.9), "wall_coin": (0.540 + COIN_DX, 0.725)})
     logs = []
     upgrade_walls(scr, cfg, logs.append, lambda: None, _nop_sleep)
     assert (0.661, 0.809) not in scr.clicks
@@ -1155,16 +1176,14 @@ def test_one_look_at_an_unchanged_price_is_not_the_cap(monkeypatch):
     assert scr.click_names.count("wall_add1") >= 8
 
 
-def test_a_price_that_never_moves_means_no_wall_could_be_added_and_nothing_is_pressed(monkeypatch):
-    """Not even one wall is affordable: the counter never moves, so there is no cap to accept: skip the resource."""
+def test_a_price_that_never_moves_and_is_payable_upgrades_the_one_wall(monkeypatch):
+    """'+1' adds nothing when only the selected wall is left (or only one can be paid): the price is not red, so
+    that wall is upgraded. Skipping it would pick the same level from the list for ever."""
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
     scr = ScheduleScreen([7], has_templates={"wall_panel": True, "walls_dialog": True},
                          find_templates={"confirm_upgrade": (0.5, 0.9)})
-    logs = []
-    result = upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep)
-    assert result is False
-    assert "wall_up_gold" not in scr.click_names and "wall_up_elixir" not in scr.click_names
-    assert any("No se pudo anadir ningun muro" in m for m in logs)
+    assert upgrade_walls(scr, _cfg(), lambda _m: None, lambda: None, _nop_sleep) is True
+    assert "wall_up_gold" in scr.click_names and "wall_remove" not in scr.click_names
 
 
 # -- walls from the Construir list ---------------------------------------------------------------
@@ -1329,3 +1348,44 @@ def test_busy_skips_a_wall_row_and_presses_the_next_one(monkeypatch):
     assert ok is True
     assert ROW not in scr.clicks and (ROW[0], ROW[1] + ROW_PITCH) in scr.clicks
 
+
+
+@pytest.mark.parametrize("fixture, gold_x, remove_x", [
+    ("wall_bar_without_plus_ten.png", 0.501, 0.339),        # level 13, two walls left: no '+10'
+    ("wall_bar_with_plus_ten.png", 0.541, 0.299),           # level 14: other artwork, six buttons
+    ("wall_bar_two_selected.png", 0.541, 0.299),            # level 15, two walls marked: the label is white
+])
+def test_the_multi_wall_bar_is_read_from_the_screen(fixture, gold_x, remove_x):
+    """Real captures (2026-11-27)."""
+    frame = cv2.imread(str(Path(__file__).parent / "fixtures" / "ui" / fixture))
+
+    class Captured(FakeScreen):
+        def find(self, template):
+            found = templates.score(frame, template, defaults.DIR)
+            return found[1] if found and found[0] >= templates.threshold_for(template) else None
+
+    price = defaults.REGIONS["wall_cost_gold"]
+    coin = _bar_button(Captured(), ("wall_coin",), (price[1] + price[3]) / 2, _nop_sleep)
+    take = _bar_button(Captured(), WALL_TAKE_ONE, defaults.BUTTONS["wall_remove"][1], _nop_sleep)
+    assert coin[0] - COIN_DX == pytest.approx(gold_x, abs=0.004) and take[0] == pytest.approx(remove_x, abs=0.004)
+    drop = _bar_button(Captured(), ("wall_drop",), coin[1], _nop_sleep)
+    assert drop[0] - coin[0] == pytest.approx(WALL_BAR_PITCH, abs=0.004)
+
+
+def test_a_bar_without_an_elixir_button_never_gets_the_elixir_click(monkeypatch):
+    """Walls below level 9 only take gold: right of the gold button is the village (or the item button), whose
+    still pixels look like a price that never moves."""
+    monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: False)
+    monkeypatch.setattr(vision, "region_crop", lambda _f, _r: np.zeros((4, 4, 3), dtype=np.uint8))
+    monkeypatch.setattr(vision, "region_changed", lambda _a, _b: False)
+    scr = FakeScreen(has_templates={"wall_panel": True}, find_templates={"wall_drop": None})
+    upgrade_walls(scr, _cfg(), lambda s: None, lambda: None, _nop_sleep)
+    assert "wall_up_gold" in scr.click_names and "wall_up_elixir" not in scr.click_names
+
+
+def test_a_bar_that_is_not_recognised_gets_no_click(monkeypatch):
+    scr = FakeScreen(has_templates={"wall_panel": True}, find_templates={"wall_coin": None, "wall_take_one": None})
+    logs = []
+    assert upgrade_walls(scr, _cfg(), logs.append, lambda: None, _nop_sleep) is False
+    assert not {"wall_add1", "wall_remove", "wall_up_gold", "wall_up_elixir"} & set(scr.click_names)
+    assert any("No reconozco los botones" in m for m in logs)
