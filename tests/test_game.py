@@ -538,3 +538,26 @@ def test_star_bonus_chest_is_opened_and_its_reward_collected(tmp_path, monkeypat
     assert clicks[3] == pytest.approx((0.49, 0.855), abs=0.02)                       # Continuar
     clicks.clear()
     assert g.dismiss_popup() is False and clicks == []
+
+
+def test_deployment_zooms_the_camera_out_first(tmp_path, monkeypatch):
+    """Live 2026-11-27: selecting a wall from the list leaves the camera zoomed in, the next attack screen opened
+    zoomed too and every recorded tap fell on a building: nothing was deployed."""
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    done = []
+    monkeypatch.setattr(game._Screen, "zoom_out", lambda self: done.append("zoom"))
+    monkeypatch.setattr(game.player, "play", lambda *a: done.append("play") or True)
+    assert g.play_deployment() is True and done == ["zoom", "play"]
+
+
+def test_close_menu_closes_the_shop_left_open_over_the_village(tmp_path, monkeypatch):
+    from cocmacro import defaults
+    shown = {n: cv2.imread(str(FIX / "ui" / f"{n}.png")) for n in ("shop_offers_open", "village_no_menu")}
+    current, clicks = ["shop_offers_open"], []
+    monkeypatch.setattr(winctl, "click", lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(game.frames, "grab", lambda win: shown[current[0]])
+    g = game.RealGame(None, config.Config(), None, threading.Event(), defaults.DIR)
+    assert g.close_menu() is True and clicks == [pytest.approx((0.968, 0.062), abs=0.005)]
+    clicks.clear()
+    current[0] = "village_no_menu"
+    assert g.close_menu() is False and clicks == []
