@@ -58,8 +58,8 @@ sail back, then continue as today (read builders, upgrade walls or wait).
 - *After leaving because the Builder Base storage is full and no main builder is free, the bot waits in the main village
   as today. It does not sail back while the Builder Base is known full* (nothing spends its gold), so there is no
   ping-pong between villages. *The "full" mark is cleared when the bot is restarted.*
-- *Detecting full Builder Base gold is required before shipping* (new regions and thresholds measured on captures). If
-  the bar is unreadable, the bot leaves after 10 attacks in a row, checks the main builders, and may come back.
+- *A visit is at most 5 attacks*; then the bot sails back, looks at the main builders and may return. Full Builder
+  Base gold is read with the main village's gold-bar reading (same bar geometry); never seen full live.
 - Only the `wait_builder` point ("espero a que quede uno") triggers it, not `wait_if_full` / `stop_when_full`.
 - The army needs no handling: three attacks in a row were started with the same army, no training or cooldown.
 - The first task is a reliable "this is the Builder Base" recogniser (and "this is the main village"); no Builder Base

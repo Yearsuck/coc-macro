@@ -943,3 +943,69 @@ def test_a_menu_that_never_closes_keeps_the_recoveries_counting_and_never_ends_t
     bot.run()
     assert bot.recoveries_done >= 2 and bot.attacks_done == 0
     assert sum("El menu de Batalla esta abierto" in m for m in logs) >= 2
+
+
+class BoatGame(KeepGame):
+    """No free builder and full storages: the Builder Base is farmed until a builder is free."""
+
+    def __init__(self, results, **kw):
+        super().__init__(builders=0, levels=[{"gold": True, "elixir": False}], **kw)
+        self.results, self.visits = list(results), 0
+
+    def farm_builder_base(self, log, check):
+        self.visits += 1
+        result = self.results.pop(0)
+        if not self.results:
+            self.builders = 1
+        return result
+
+
+@pytest.mark.parametrize("results, visits", [(["ok", "ok"], 2),             # farms until a builder is free
+                                             (["full", "ok"], 1),           # full: waits in the main village instead
+                                             (["failed"] * 5, 3)])          # stops going after three failures
+def test_walls_farm_the_builder_base_while_no_builder_is_free(results, visits):
+    g = BoatGame(results)
+    naps = []
+
+    def sleep(_s):
+        naps.append(1)
+        if len(naps) > 3000:
+            g.builders = 1
+
+    Bot(g, config.Config(mode="walls"), lambda m: None, threading.Event(), sleep=sleep).spend_free_slots()
+    assert g.visits == visits and "walls" in g.kinds
+
+
+def test_no_village_routine_runs_while_stuck_in_the_builder_base():
+    """Review finding: the Builder Base counter sits where the builders are read, so a failed trip home would have
+    upgraded over there."""
+    class Marooned(BoatGame):
+        def leave_builder_base(self, log, check):
+            return False if self.visits else None
+
+    g = Marooned(["failed", "ok"])
+    bot = Bot(g, config.Config(mode="walls"), lambda m: None, threading.Event(), sleep=lambda s: None)
+    with pytest.raises(bot_module._Stuck):
+        bot.spend_free_slots()
+    assert "walls" not in g.kinds
+
+
+def test_a_disconnection_during_a_visit_is_not_a_farming_failure():
+    class Dropped(BoatGame):
+        reloaded = False
+
+        def reload_if_disconnected(self):
+            if self.visits == 1 and not self.reloaded:
+                self.reloaded = True
+                return True
+            return False
+
+        def farm_builder_base(self, log, check):
+            result = super().farm_builder_base(log, check)
+            check()
+            return result
+
+    g = Dropped(["failed", "ok"])
+    bot = Bot(g, config.Config(mode="walls"), lambda m: None, threading.Event(), sleep=lambda s: None)
+    bot.spend_free_slots()
+    assert bot._farm_failures == 0 and "walls" in g.kinds

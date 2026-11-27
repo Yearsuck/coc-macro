@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cv2
 
-from cocmacro import frames, ocr, player, templates, upgrades, vision, winctl
+from cocmacro import builder_base, frames, ocr, player, templates, upgrades, vision, winctl
 from cocmacro.config import Config
 from cocmacro.recorder import Recording
 
@@ -312,6 +312,15 @@ class RealGame:
             return upgrades.upgrade_busy(scr, self.cfg, log, check, time.sleep,
                                          only=("builders",), keep={"builders": 1})
         return False
+
+    def farm_builder_base(self, log, check) -> str:
+        """One farming visit to the Builder Base: 'ok', 'full' or 'failed'."""
+        scr = _Screen(self, check)
+        return builder_base.farm(scr, self.cfg, lambda: self.storage_levels()["gold"], log, check, time.sleep)
+
+    def leave_builder_base(self, log, check) -> bool | None:
+        """Sail home if the Builder Base is on screen. None if it was not, False if it could not get out."""
+        return builder_base.leave(_Screen(self, check), log, check, time.sleep)
 
     def play_deployment(self) -> bool:
         # The recording was made with the camera all the way out. The game keeps the zoom between screens, and the
