@@ -21,6 +21,7 @@ PRESS_NUDGES = ((0.0, 0.0), (0.008, 0.006), (-0.008, -0.006), (0.008, -0.006), (
 SEARCH_BACK_AT = (0.055, 0.905)     # where the search screen draws its Volver button
 DIALOG_CONFIRM_S = 0.3   # an unknown dialog must still be there after this long before it is pressed
 REPEAT_PRESS_S = 8      # a press this soon after the last one of the same button counts as repeated
+SHOP_CLOSE_AT = (0.968, 0.062)     # where the full-screen shop draws its red X
 STAR_BONUS_STEPS = 12     # chest taps + 'Continuar' presses at most (live: 3-4 taps, then one press)
 STAR_TAP_S, STAR_CONTINUE_S = 1.2, 2.0     # the chest shakes after a tap; the reward fades out after Continuar
 INACTIVITY_TEMPLATES = (("reload_inactive_title", 0.80), ("reload_inactive_body", 0.75))
@@ -129,6 +130,10 @@ class RealGame:
         if self._has(frame, "upgrade_window"):
             x, y = self.cfg.buttons["upgrade_window_close"]
             winctl.click(self.win, x, y)
+            return True
+        shop = self._found(frame, "upgrade_window_x")       # the same red X, drawn in the shop's corner
+        if shop is not None and abs(shop[0] - SHOP_CLOSE_AT[0]) <= templates.POS_TOL                 and abs(shop[1] - SHOP_CLOSE_AT[1]) <= templates.POS_TOL:
+            winctl.click(self.win, *shop)     # the shop opens by itself at times (offers, after a reload)
             return True
         found = templates.score(frame, "menu_close_x", self.tpl_dir)
         if found is None or found[0] < templates.threshold_for("menu_close_x"):
