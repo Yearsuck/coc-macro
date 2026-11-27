@@ -29,6 +29,10 @@ INACTIVITY_TEMPLATES = (("reload_inactive_title", 0.80), ("reload_inactive_body"
 GOLD_HUE, ELIXIR_HUE = (18, 40), (135, 175)   # OpenCV hue of the gold and elixir storage bars
 
 
+class _Stopped(Exception):
+    """Stop was asked for in the middle of a camera move."""
+
+
 class _Screen:
     """upgrades.Screen over the real window: capture, click, template lookups."""
 
@@ -301,6 +305,16 @@ class RealGame:
         return False
 
     def play_deployment(self) -> bool:
+        # The recording was made with the camera all the way out. The game keeps the zoom between screens, and the
+        # wall routine leaves it close on a wall (live 2026-11-27: every tap fell on a building, nothing deployed).
+        def check() -> None:
+            if self.stop.is_set():
+                raise _Stopped
+
+        try:
+            _Screen(self, check).zoom_out()
+        except _Stopped:
+            return False
         return player.play(self.win, self.recording, self.stop)
 
     def dump_debug(self, reason: str) -> None:

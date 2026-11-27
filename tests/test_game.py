@@ -538,3 +538,13 @@ def test_star_bonus_chest_is_opened_and_its_reward_collected(tmp_path, monkeypat
     assert clicks[3] == pytest.approx((0.49, 0.855), abs=0.02)                       # Continuar
     clicks.clear()
     assert g.dismiss_popup() is False and clicks == []
+
+
+def test_deployment_zooms_the_camera_out_first(tmp_path, monkeypatch):
+    """Live 2026-11-27: selecting a wall from the list leaves the camera zoomed in, the next attack screen opened
+    zoomed too and every recorded tap fell on a building: nothing was deployed."""
+    g, _ = make(tmp_path, monkeypatch, "f004.png")
+    done = []
+    monkeypatch.setattr(game._Screen, "zoom_out", lambda self: done.append("zoom"))
+    monkeypatch.setattr(game.player, "play", lambda *a: done.append("play") or True)
+    assert g.play_deployment() is True and done == ["zoom", "play"]
