@@ -123,10 +123,14 @@ class RealGame:
         return self._has(frames.grab(self.win), "battle_menu")
 
     def close_menu(self) -> bool:
-        """Something a stopped routine left open: an upgrade window first (its own X), then the Construir menu.
+        """Something a stopped routine left open: the goblin's offer or an upgrade window first (their own X),
+        then the Construir menu.
         The menu's X is pressed only where it really is (the corner is the gold bar when no menu is open and
         that opens the gem shop). True if a button was pressed."""
         frame = frames.grab(self.win)
+        if self._has(frame, "goblin_dialog"):
+            winctl.click(self.win, *self.cfg.buttons["goblin_close"])
+            return True
         if self._has(frame, "upgrade_window"):
             x, y = self.cfg.buttons["upgrade_window_close"]
             winctl.click(self.win, x, y)

@@ -550,6 +550,18 @@ def test_deployment_zooms_the_camera_out_first(tmp_path, monkeypatch):
     assert g.play_deployment() is True and done == ["zoom", "play"]
 
 
+def test_close_menu_closes_a_left_over_goblin_offer_with_its_x(tmp_path, monkeypatch):
+    from cocmacro import defaults
+    frame = cv2.imread(str(FIX / "ui" / "dialog_goblin_builder.png"))
+    clicks = []
+    monkeypatch.setattr(winctl, "click", lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(game.frames, "grab", lambda win: frame)
+    cfg = config.Config()
+    cfg.buttons.update(defaults.BUTTONS)
+    g = game.RealGame(None, cfg, None, threading.Event(), defaults.DIR)
+    assert g.close_menu() is True and clicks == [defaults.BUTTONS["goblin_close"]]
+
+
 def test_close_menu_closes_the_shop_left_open_over_the_village(tmp_path, monkeypatch):
     from cocmacro import defaults
     shown = {n: cv2.imread(str(FIX / "ui" / f"{n}.png")) for n in ("shop_offers_open", "village_no_menu")}

@@ -543,10 +543,12 @@ class Bot:
             return
         builders = self._free_builders()
         if builders > 1 and self._spend("surplus"):
-            # The routine stops at the reserve, so one builder is free for sure. Right after the menu closes the
-            # HUD is still settling and the counter can read blurry: wait, look again, and trust the reserve.
+            # The routine stops at the reserve. Right after the menu closes the HUD is still settling and the counter
+            # can read blurry: wait, look again, and trust the reserve then. A readable 0 is believed (the surplus can
+            # take the last real builder and leave only the goblin).
             self.sleep(STORAGE_SETTLE)
-            builders = max(self._free_builders(), 1)
+            reading = self._builders_reading()
+            builders = 1 if reading is None else reading
         # Without full storages, save the builder for walls and proceed to attack
         if not self._any_storage_full():
             return

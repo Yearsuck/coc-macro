@@ -23,6 +23,7 @@ BUTTONS = {
     "tab_builders": (0.764, 0.930), "tab_researchers": (0.833, 0.930), "tab_pets": (0.967, 0.930),
     "upgrade_confirm": (0.698, 0.850), "upgrade_window_close": (0.883, 0.075),
     "dialog_close": (0.669, 0.333),      # X of the "No hay constructores libres" notice
+    "goblin_close": (0.829, 0.263),      # X of the goblin builder's offer ('Buenas, jefe!')
     "reload_inactive": (0.355, 0.571),   # VOLVER A CARGAR of the inactivity dialog
 }
 REGIONS = {

@@ -15,6 +15,7 @@ __all__ = [
     "storage_full",
     "dark_storage_full",
     "free_count",
+    "goblin_above",
     "cost_is_red",
     "native_dialog",
 ]
@@ -245,6 +246,26 @@ def free_count(frame: np.ndarray, region: Region) -> int | None:
             return 0
         return MANY_FREE if _digit_distance(feat, asp, ONE_FILE) >= MANY_MIN_DIST else 1
     return None
+
+
+# The goblin's lime skin in the box above a counter: its face covers >= 0.2 of it, a human face or the scenery behind
+# the panel 0.0 (measured on 230 captures, 2026-11-27).
+GOBLIN_HSV_LOW, GOBLIN_HSV_HIGH = (25, 110, 165), (45, 255, 255)
+GOBLIN_ICON_H = 0.035      # the face sits this far above the counter's digits
+GOBLIN_MIN_SHARE = 0.10
+
+
+def goblin_above(frame: np.ndarray, region: Region) -> bool:
+    """True when the face drawn above a 'free/total' counter is a goblin's."""
+    x0, y0, x1, _ = region
+    box = (x0, max(0.0, y0 - GOBLIN_ICON_H), x1, y0)
+    if not _valid(frame, box):
+        return False
+    crop = ocr._crop(frame, box)
+    if crop.size == 0:
+        return False
+    skin = cv2.inRange(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV), GOBLIN_HSV_LOW, GOBLIN_HSV_HIGH)
+    return bool(skin.mean() / 255 >= GOBLIN_MIN_SHARE)
 
 
 WALL_HSV_LOW, WALL_HSV_HIGH = (85, 25, 110), (110, 95, 215)    # steel-blue walls, measured on real captures
