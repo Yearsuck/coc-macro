@@ -66,9 +66,21 @@ class Screen(Protocol):
 def free_slots(scr: Screen, cfg: Config) -> dict[str, int | None]:
     """Return the number of free builders and researchers (None = unreadable)."""
     return {
-        "builders": vision.free_count(scr.grab(), cfg.regions["free_builders"]),
-        "researchers": vision.free_count(scr.grab(), cfg.regions["free_researchers"]),
+        "builders": _free(scr.grab(), cfg, "free_builders"),
+        "researchers": _free(scr.grab(), cfg, "free_researchers"),
     }
+
+
+# Counters drawn under the face of whoever is free. A goblin works for gems, so its slot is not a free one; the pets
+# counter has a coin above it and no goblin.
+GOBLIN_COUNTERS = {"free_builders", "free_researchers", "tab_count_builders", "tab_count_researchers"}
+
+
+def _free(frame: np.ndarray, cfg: Config, name: str) -> int | None:
+    count = vision.free_count(frame, cfg.regions[name])
+    if count and name in GOBLIN_COUNTERS and vision.goblin_above(frame, cfg.regions[name]):
+        return 0
+    return count
 
 
 def _close_menu(scr: Screen, cfg: Config, check, sleep) -> None:
@@ -84,15 +96,16 @@ def _close_menu(scr: Screen, cfg: Config, check, sleep) -> None:
 
 
 def _dismiss_no_builder(scr: Screen, cfg: Config, log, check, sleep) -> bool:
-    """The game answers an upgrade with no free builder by offering to finish another task for gems. Close
-    that notice with its X (never the green gem button) and report that it was there."""
-    if not scr.has("no_builder_dialog"):
-        return False
-    log("No hay constructores libres: cierro el aviso sin gastar gemas")
-    check()
-    scr.click(*cfg.buttons["dialog_close"])
-    sleep(CLICK_DELAY)
-    return True
+    """The game answers an upgrade with no free builder by offering to finish another task, or to hire the goblin
+    builder, for gems. Close that notice with its X (never the green gem button) and report that it was there."""
+    for notice, close in (("no_builder_dialog", "dialog_close"), ("goblin_dialog", "goblin_close")):
+        if scr.has(notice):
+            log("No hay constructores libres: cierro el aviso sin gastar gemas")
+            check()
+            scr.click(*cfg.buttons[close])
+            sleep(CLICK_DELAY)
+            return True
+    return False
 
 
 def _menu_opened(scr: Screen, sleep, tries: int = 6) -> bool:
@@ -640,7 +653,7 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
             log("El menu Construir no se abrio: no pulso nada")
             return False
         frame = scr.grab()
-        free = {t[0]: vision.free_count(frame, cfg.regions[t[2]]) for t in BUSY_TABS}
+        free = {t[0]: _free(frame, cfg, t[2]) for t in BUSY_TABS}
         todo = [t for t in BUSY_TABS if (only is None or t[0] in only) and (free[t[0]] or 0) > keep.get(t[0], 0)]
         if not todo:
             log("Nada libre en el menu Construir")
@@ -662,11 +675,12 @@ def upgrade_busy(scr: Screen, cfg: Config, log, check, sleep, only=None, keep=No
                     break
                 started = True
                 log(f"Mejora lanzada ({slot}{', heroe' if hero_done else ''})")
-                now = vision.free_count(scr.grab(), cfg.regions[count_region])
+                now = _free(scr.grab(), cfg, count_region)
                 if now is None:                       # blurry for a moment right after the confirm: look again
                     sleep(0.6)
-                    now = vision.free_count(scr.grab(), cfg.regions[count_region])
-                if not now or now >= left or now <= reserve:   # done / unreadable / did not start / reserve reached
+                    now = _free(scr.grab(), cfg, count_region)
+                stuck = bool(now) and (now > left or now == left < vision.MANY_FREE)     # at 'two or more' it need not drop
+                if not now or stuck or now <= reserve:   # done / unreadable / did not start / reserve reached
                     break
                 left = now
             if not scr.has("menu_close_x"):             # the game closed the menu: nothing more to do

@@ -313,7 +313,8 @@ class MenuScreen(FakeScreen):
 def _busy_cfg():
     cfg = _cfg()
     cfg.buttons.update({"tab_builders": (0.76, 0.93), "tab_researchers": (0.83, 0.93), "tab_pets": (0.97, 0.93),
-                        "upgrade_confirm": (0.70, 0.85), "upgrade_window_close": (0.88, 0.07), "dialog_close": (0.67, 0.33)})
+                        "upgrade_confirm": (0.70, 0.85), "upgrade_window_close": (0.88, 0.07), "dialog_close": (0.67, 0.33),
+                        "goblin_close": (0.83, 0.26)})
     cfg.regions.update({"tab_count_builders": (0.74, 0.95, 0.79, 0.98), "tab_count_researchers": (0.81, 0.95, 0.86, 0.98),
                         "tab_count_pets": (0.95, 0.95, 0.99, 0.98), "upgrade_cost": (0.66, 0.84, 0.72, 0.90)})
     return cfg
@@ -555,16 +556,33 @@ def _afford_one(monkeypatch):
     monkeypatch.setattr(vision, "cost_is_red", lambda _f, _r: next(seq, False))
 
 
-def test_walls_close_the_no_builder_notice_and_never_press_anything_else(monkeypatch):
-    """Seen live: with no free builder the game offers to finish another task for 3 gems."""
+@pytest.mark.parametrize("notice, close", [("no_builder_dialog", "dialog_close"), ("goblin_dialog", "goblin_close")])
+def test_walls_close_the_no_builder_notice_and_never_press_anything_else(monkeypatch, notice, close):
+    """Seen live: with no free builder the game offers to finish another task for gems, or to hire the goblin
+    builder for gems (2026-11-27: its green button starts 9 px right of where 'Vale' is pressed)."""
     _afford_one(monkeypatch)
-    scr = FakeScreen(has_templates={"wall_panel": True, "no_builder_dialog": True, "walls_dialog": True},
+    scr = FakeScreen(has_templates={"wall_panel": True, notice: True, "walls_dialog": True},
                      find_templates={"confirm_upgrade": (0.59, 0.62)})
     logs = []
     assert upgrade_walls(scr, _busy_cfg(), logs.append, lambda: None, _nop_sleep) is False
     n = scr.click_names
-    assert n[-1] == "dialog_close" and "(0.590,0.620)" not in n
+    assert n[-1] == close and "(0.590,0.620)" not in n
     assert sum(m.startswith("No hay constructores") for m in logs) == 1
+
+
+@pytest.mark.parametrize("fixture, builders", [("counters_goblin_builder.png", 0), ("counters_human_builder.png", 1)])
+def test_a_goblin_builder_is_not_a_free_builder(fixture, builders):
+    """Real captures (2026-11-27): '1/7' under a goblin face is a builder that costs gems."""
+    scr = FakeScreen()
+    scr._frame = cv2.imread(str(Path(__file__).parent / "fixtures" / "ui" / fixture))
+    cfg = Config()
+    cfg.regions.update(defaults.REGIONS)
+    assert free_slots(scr, cfg)["builders"] == builders
+
+
+def test_the_goblin_offer_is_recognised():
+    frame = cv2.imread(str(Path(__file__).parent / "fixtures" / "ui" / "dialog_goblin_builder.png"))
+    assert templates.match(frame, "goblin_dialog", defaults.DIR)
 
 
 def test_walls_confirm_only_with_the_walls_dialog_title_on_screen(monkeypatch):
@@ -628,10 +646,19 @@ def test_busy_stops_a_tab_when_the_cheapest_item_cannot_be_paid(monkeypatch):
 
 
 def test_busy_does_not_loop_when_the_counter_never_drops(monkeypatch):
-    scr = _drain_screen(2, stick=True)
+    scr = _drain_screen(1, stick=True)
     cfg = _drain(monkeypatch, scr)
     upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
     assert scr.confirms == 1
+
+
+def test_busy_keeps_going_while_the_counter_says_two_or_more(monkeypatch):
+    """The counter is only known as 'two or more' above one, so it does not drop until the last builders."""
+    scr = _drain_screen(4)
+    cfg = _drain(monkeypatch, scr)
+    monkeypatch.setattr(vision, "free_count", lambda _f, r: min(scr.free, 2) if r == cfg.regions["tab_count_builders"] else 0)
+    upgrade_busy(scr, cfg, lambda s: None, lambda: None, _nop_sleep)
+    assert scr.confirms == 4
 
 
 def test_busy_drain_is_capped_per_tab(monkeypatch):
