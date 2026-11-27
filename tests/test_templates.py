@@ -74,6 +74,8 @@ def test_shipped_buttons_are_never_taken_for_each_other():
                 continue
             if {a, b} <= set(WALL_TAKE_ONE):                      # one button in its two colours: either may match
                 continue
+            if {a, b} == {"back", "bb_back"}:        # both villages' 'Volver'; the Builder Base also asks for its banner
+                continue
             frame = cv2.copyMakeBorder(tb, 6, 6, 6, 6, cv2.BORDER_REPLICATE)
             margin = 0.05 if a in templates.STRICT_NAMES else 0.1    # look-alike filter buttons use the strict cut
             assert cv2.matchTemplate(frame, ta, cv2.TM_CCOEFF_NORMED).max() < templates.threshold_for(a) - margin, (a, b)
