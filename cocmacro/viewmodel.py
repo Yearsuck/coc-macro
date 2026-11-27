@@ -7,6 +7,7 @@ PHASES = [("search", "Buscar"), ("evaluate", "Evaluar"), ("deploy", "Desplegar")
 PHASE_TITLES = {"search": "Buscando aldea", "evaluate": "Evaluando aldea", "deploy": "Desplegando tropas",
                 "watch": "Vigilando la batalla", "surrender": "Rindiéndose", "back": "Volviendo al pueblo",
                 "upgrade": "Mejorando", "wait_builder": "Esperando un constructor libre",
+                "builder_base": "Farmeando en la aldea pequena",
                 "recover": "Recuperandose de un atasco"}
 
 
@@ -87,7 +88,7 @@ def mode_from_label(label: str) -> str:
 MODE_HELP = {
     "none": "Solo ataca: no gasta recursos entre ataques.",
     "walls": "Ataca hasta llenar oro o elixir, mejora muros con los dos y vuelve a atacar. "
-             "Si no hay constructor libre, espera a que quede uno.",
+             "Mientras no hay constructor libre, farmea en la aldea pequena.",
     "busy": "Antes de cada ataque usa cada constructor, investigador o mascota libre en la mejora mas barata.",
 }
 

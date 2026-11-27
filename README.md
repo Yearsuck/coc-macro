@@ -12,7 +12,7 @@ Windows desktop automation app for Clash of Clans running in **Google Play Games
 - **Smart Surrender**: Surrenders when battle destruction reaches a target damage percentage or when the countdown clock drops below a set cutoff.
 - **Between-Attack Upgrade Modes**:
   - `Solo atacar` (Attack only): Pure farming loop without village maintenance.
-  - `Mejorar muros` (Upgrade walls): Attacks until the gold or elixir storage is full, then upgrades walls with both, reserving a builder for them.
+  - `Mejorar muros` (Upgrade walls): Attacks until the gold or elixir storage is full, then upgrades walls with both, reserving a builder for them. While no builder is free it farms the Builder Base: it sails there by boat, attacks, and comes back to look at the builders every 5 attacks, until the Builder Base gold is full.
   - `Mejorar lo mas barato` (Upgrade cheapest): Automatically starts the cheapest building, research, or pet upgrade whenever slots are free, with an optional `Heroes primero` (Heroes first) priority filter.
 - **Storage Protection**: Optionally pauses attacks when gold and elixir storages are completely full (`Parar si los depositos estan llenos`).
 - **Resilience**: Presses system dialogs (inactivity, server errors: `VOLVER A CARGAR` / Reload), dismisses star bonus or gem dialog popups, and gets back to the village and carries on after a step times out.

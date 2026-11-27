@@ -34,6 +34,7 @@ NEXT_TRIES = 3            # presses of "Siguiente" before giving up
 DIALOG_EVERY_S = 5        # seconds between dialog checks inside _wait and the battle loop
 BUILDER_BLIND_LIMIT = 6   # looks in a row at an unreadable builder counter before walls mode stops waiting
 SELF_START_LIMIT = 5      # max battles started by themselves (scout countdown) in one _cycle
+FARM_FAIL_LIMIT = 3       # Builder Base visits failing in a row before walls mode stops going
 RECOVER_STEPS = 20        # rounds of recovery before giving up
 RECOVER_IDLE_S = 5        # seconds to wait on an unrecognised screen during recovery
 RECOVER_PAUSE_S = 30      # base pause between recovery attempts
@@ -57,6 +58,10 @@ class _Abort(Exception):
 
 class _Stuck(Exception):
     pass
+
+
+class _Interrupted(_Stuck):
+    """A disconnection dialog showed up in the middle of a Builder Base visit and was pressed."""
 
 
 class _Unreadable(Exception):
@@ -83,6 +88,8 @@ class Bot:
         self.attacks_done = 0
         self.recoveries_done = 0     # recoveries started in this run (never reset: the window shows the total)
         self._last_stuck = None
+        self._farm_failures, self._farm_off = 0, False    # Builder Base farming while walls mode waits
+        self._dialog_looked = 0.0
 
     # -- helpers -------------------------------------------------------
     def _phase(self, name: str) -> None:
@@ -531,6 +538,56 @@ class Bot:
     def _free_builders(self) -> int:
         return self._builders_reading() or 0
 
+    def _farm_builder_base(self) -> bool:
+        """One visit to the Builder Base while the main village has nothing to do. True if time was spent there;
+        False when there is no point (full, failing, or the game cannot do it), so the caller waits instead."""
+        fn = getattr(self.game, "farm_builder_base", None)
+        if self.dry_run or not fn or self._farm_off:
+            return False
+        self._phase("builder_base")
+        try:
+            result = fn(self.log, self._check_visit)
+        except _Interrupted as e:                   # the game reloads into the main village: not a failure
+            self.log(str(e))
+            result = "ok"
+        except (_Abort, WindowNotFound, WindowMinimized):
+            raise
+        except Exception as e:
+            self.log(f"Error en la aldea pequena: {e!r}")
+            result = "failed"
+        self._leave_builder_base()                  # whatever happened, go on from the main village
+        self.sleep(STORAGE_SETTLE)
+        if result == "failed":
+            self._farm_failures += 1
+            if self._farm_failures >= FARM_FAIL_LIMIT:
+                self._farm_off = True
+                self.log("Dejo de ir a la aldea pequena: ha fallado varias veces seguidas")
+            return False
+        self._farm_failures = 0
+        if result == "full":
+            self._farm_off = True                   # nothing there spends its gold: no point in going back
+        self._phase("wait_builder")
+        return True
+
+    def _check_visit(self) -> None:
+        """`_check` for the long Builder Base routines, which would otherwise sit under a disconnection dialog."""
+        self._check()
+        if time.monotonic() - self._dialog_looked >= DIALOG_EVERY_S:
+            self._dialog_looked = time.monotonic()
+            if self._reload_if_disconnected():
+                raise _Interrupted("Se corto la conexion en la aldea pequena")
+
+    def _leave_builder_base(self) -> bool:
+        """True if the Builder Base was on screen and the game is home again. Stuck there is _Stuck: no main-village
+        routine may run on it."""
+        fn = getattr(self.game, "leave_builder_base", None)
+        if not fn or self.dry_run:
+            return False
+        was = fn(self.log, self._check_visit)
+        if was is False:
+            raise _Stuck("No consigo volver de la aldea pequena")
+        return bool(was)
+
     def spend_free_slots(self) -> None:
         """Before every attack (the first one too). Busy mode: use every free builder / researcher / pet, so the
         counters are at 0, unless the price cannot be paid (the routine drains every tab by itself). Walls mode:
@@ -561,7 +618,9 @@ class Bot:
             blind = 0
             while builders < 1:
                 self._reload_if_disconnected()
-                self._nap(FULL_POLL_S)
+                if not self._farm_builder_base():
+                    self._nap(FULL_POLL_S)
+                    self._leave_builder_base()      # the counter read next must be the main village's
                 reading = self._builders_reading()
                 blind = blind + 1 if reading is None else 0
                 if blind >= BUILDER_BLIND_LIMIT:
@@ -607,6 +666,8 @@ class Bot:
             try:
                 self._check()
                 if self._reload_if_disconnected():
+                    continue
+                if self._leave_builder_base():
                     continue
                 # home is checked before any click so that nothing is pressed on the village
                 if self.game.screen_is("home"):
@@ -679,6 +740,7 @@ class Bot:
             stuck: _Stuck | None = None
             try:
                 self._reload_if_disconnected()
+                self._leave_builder_base()           # the routines below only know the main village
                 if not self.dry_run:
                     self._close_leftover_menu()      # so the storage bars are readable
                 if not self._battle_menu_open():     # the panel over the village would make every tap a lottery
